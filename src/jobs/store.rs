@@ -44,6 +44,8 @@ pub trait JobStore: Send + Sync {
     async fn expired_jobs(&self, now: DateTime<Utc>) -> Result<Vec<Job>, StoreError>;
     /// Non-pinned done region jobs, least recently downloaded first.
     async fn evictable_region_jobs(&self) -> Result<Vec<Job>, StoreError>;
+    /// Done custom exports, least recently downloaded first (disk budget eviction).
+    async fn evictable_custom_jobs(&self) -> Result<Vec<Job>, StoreError>;
     /// All done jobs (startup file verification and cache size accounting).
     async fn done_jobs(&self) -> Result<Vec<Job>, StoreError>;
     /// Move any running jobs back to queued (startup crash recovery).
@@ -104,6 +106,7 @@ fn job_from_row(row: &SqliteRow) -> Result<Job, StoreError> {
         id: row.try_get("id")?,
         kind,
         status,
+        name: row.try_get("name")?,
         client_ip: row.try_get("client_ip")?,
         region_id: row.try_get("region_id")?,
         geometry: row.try_get("geometry")?,
@@ -127,14 +130,15 @@ fn job_from_row(row: &SqliteRow) -> Result<Job, StoreError> {
 impl JobStore for SqliteJobStore {
     async fn insert(&self, job: &Job) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO jobs (id, kind, status, client_ip, region_id, geometry, maxzoom, \
+            "INSERT INTO jobs (id, kind, status, name, client_ip, region_id, geometry, maxzoom, \
              estimated_tiles, file_path, file_size, error, pinned, created_at, started_at, \
              finished_at, expires_at, last_download_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job.id)
         .bind(job.kind.as_str())
         .bind(job.status.as_str())
+        .bind(&job.name)
         .bind(&job.client_ip)
         .bind(&job.region_id)
         .bind(&job.geometry)
@@ -269,6 +273,16 @@ impl JobStore for SqliteJobStore {
         rows.iter().map(job_from_row).collect()
     }
 
+    async fn evictable_custom_jobs(&self) -> Result<Vec<Job>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT * FROM jobs WHERE kind = 'custom' AND status = 'done' \
+             ORDER BY COALESCE(last_download_at, finished_at, created_at) ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(job_from_row).collect()
+    }
+
     async fn done_jobs(&self) -> Result<Vec<Job>, StoreError> {
         let rows = sqlx::query("SELECT * FROM jobs WHERE status = 'done'")
             .fetch_all(&self.pool)
@@ -299,7 +313,7 @@ mod tests {
     use super::*;
 
     fn custom_job(ip: &str) -> Job {
-        Job::new_custom("{}".into(), 10, 1000, ip.into())
+        Job::new_custom("test".into(), "{}".into(), 10, 1000, ip.into())
     }
 
     #[tokio::test]

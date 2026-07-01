@@ -6,6 +6,7 @@ export interface JobView {
   id: string
   kind: JobKind
   status: JobStatus
+  name?: string
   region_id?: string
   maxzoom: number
   estimated_tiles: number

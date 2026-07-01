@@ -37,8 +37,14 @@ pub struct Limits {
     pub extract_timeout_minutes: u64,
     /// Average bytes per tile used for size estimates (derived from planet build).
     pub avg_tile_bytes: u64,
-    pub rate_limit_per_second: u64,
-    pub rate_limit_burst: u32,
+    /// Aggressive limiter on job-creating endpoints.
+    pub job_rate_limit_per_second: u64,
+    pub job_rate_limit_burst: u32,
+    /// Laxer limiter on downloads and estimates; ranged preview reads are chatty.
+    pub download_rate_limit_per_second: u64,
+    pub download_rate_limit_burst: u32,
+    /// Disk budget for custom exports; new jobs evict the oldest files to fit.
+    pub exports_max_gb: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,8 +82,11 @@ impl Default for Limits {
             max_concurrent_extracts: 1,
             extract_timeout_minutes: 60,
             avg_tile_bytes: 85,
-            rate_limit_per_second: 5,
-            rate_limit_burst: 20,
+            job_rate_limit_per_second: 1,
+            job_rate_limit_burst: 3,
+            download_rate_limit_per_second: 20,
+            download_rate_limit_burst: 100,
+            exports_max_gb: 20,
         }
     }
 }

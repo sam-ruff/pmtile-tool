@@ -93,11 +93,15 @@ export const useJobsStore = defineStore('jobs', {
       saveIds(this.ids)
     },
 
-    async createExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<JobView | null> {
+    async createExport(
+      geometry: GeoJSONGeometry,
+      maxzoom: number,
+      name?: string,
+    ): Promise<JobView | null> {
       this.creating = true
       this.createError = null
       try {
-        const job = await api().createExport(geometry, maxzoom)
+        const job = await api().createExport(geometry, maxzoom, name)
         this.track(job)
         return job
       } catch (e) {

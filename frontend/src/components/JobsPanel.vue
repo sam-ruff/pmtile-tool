@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { JobView } from '../api'
 import { formatBytes, formatCount, formatExpiry } from '../format'
 import { mapController } from '../map/controller'
@@ -7,10 +7,12 @@ import { useJobsStore } from '../stores/jobs'
 
 const jobs = useJobsStore()
 
-const previewId = computed(() => mapController.previewUrl.value)
+const previewUrl = computed(() => mapController.previewUrl.value)
+const confirmingDelete = ref<string | null>(null)
+let confirmTimer: number | null = null
 
 function isPreviewing(job: JobView): boolean {
-  return Boolean(job.download_url && previewId.value?.includes(job.id))
+  return Boolean(job.download_url && previewUrl.value?.includes(job.id))
 }
 
 function togglePreview(job: JobView) {
@@ -22,7 +24,18 @@ function togglePreview(job: JobView) {
   }
 }
 
-async function remove(job: JobView) {
+// Deleting is destructive: the first click arms the button, a second within a
+// few seconds confirms.
+async function requestDelete(job: JobView) {
+  if (confirmTimer !== null) window.clearTimeout(confirmTimer)
+  if (confirmingDelete.value !== job.id) {
+    confirmingDelete.value = job.id
+    confirmTimer = window.setTimeout(() => {
+      confirmingDelete.value = null
+    }, 4000)
+    return
+  }
+  confirmingDelete.value = null
   if (isPreviewing(job)) mapController.setPreview(null)
   await jobs.remove(job.id)
 }
@@ -31,31 +44,42 @@ async function remove(job: JobView) {
 <template>
   <div class="jobs">
     <p v-if="jobs.ordered.length === 0" class="muted">
-      No export jobs yet. Draw an area in the Custom export tab to create one.
+      No export jobs yet. Draw an area in the Custom export tab to create one. Jobs are remembered
+      in this browser and their outputs stay downloadable for 48 hours.
     </p>
 
-    <article v-for="job in jobs.ordered" :key="job.id" class="job">
+    <article v-for="job in jobs.ordered" :key="job.id" class="job" :data-testid="`job-${job.id}`">
       <header>
+        <span class="name" :title="job.id">{{ job.name ?? job.id }}</span>
         <span class="badge" :class="`badge-${job.status}`">
           <span v-if="job.status === 'queued' || job.status === 'running'" class="spinner" />
           {{ job.status }}
         </span>
-        <span class="muted id" :title="job.id">z{{ job.maxzoom }}</span>
-        <button class="btn-danger-ghost" aria-label="Delete job" @click="remove(job)">
-          Delete
-        </button>
       </header>
 
       <p v-if="job.error" class="error-text">{{ job.error }}</p>
       <p v-else-if="job.status === 'done'" class="muted">
-        {{ formatBytes(job.file_size) }} · {{ formatExpiry(job.expires_at) }}
+        z{{ job.maxzoom }} · {{ formatBytes(job.file_size) }} · {{ formatExpiry(job.expires_at) }}
       </p>
-      <p v-else class="muted">~{{ formatCount(job.estimated_tiles) }} tiles</p>
+      <p v-else class="muted">z{{ job.maxzoom }} · ~{{ formatCount(job.estimated_tiles) }} tiles</p>
 
-      <div v-if="job.status === 'done'" class="actions">
-        <a class="btn-primary download-link" :href="job.download_url" download>Download</a>
-        <button class="btn" :class="{ previewing: isPreviewing(job) }" @click="togglePreview(job)">
-          {{ isPreviewing(job) ? 'Hide preview' : 'Preview on map' }}
+      <div class="actions">
+        <template v-if="job.status === 'done'">
+          <a class="btn-primary download-link" :href="job.download_url" download>Download</a>
+          <button
+            class="btn"
+            :class="{ previewing: isPreviewing(job) }"
+            @click="togglePreview(job)"
+          >
+            {{ isPreviewing(job) ? 'Hide preview' : 'Preview on map' }}
+          </button>
+        </template>
+        <button
+          class="btn-danger-ghost delete"
+          :class="{ arming: confirmingDelete === job.id }"
+          @click="requestDelete(job)"
+        >
+          {{ confirmingDelete === job.id ? 'Confirm delete?' : 'Delete' }}
         </button>
       </div>
     </article>
@@ -81,11 +105,13 @@ async function remove(job: JobView) {
 .job header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.job header .id {
+.job header .name {
   flex: 1;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -98,6 +124,7 @@ async function remove(job: JobView) {
 .actions {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
 
 .download-link {
@@ -109,6 +136,15 @@ async function remove(job: JobView) {
 .btn.previewing {
   outline: 2px solid var(--preview);
   outline-offset: -2px;
+}
+
+.delete {
+  margin-left: auto;
+}
+
+.delete.arming {
+  background: #fef2f2;
+  font-weight: 600;
 }
 
 .badge .spinner {

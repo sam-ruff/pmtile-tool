@@ -46,6 +46,12 @@ class MapController {
   private map: Map | null = null
   private highlightSource = new VectorSource()
   private drawSource = new VectorSource()
+  private highlightLayer = new VectorLayer({
+    source: this.highlightSource,
+    style: highlightStyle,
+    zIndex: 20,
+  })
+  private drawLayer = new VectorLayer({ source: this.drawSource, style: drawStyle, zIndex: 30 })
   private previewLayer: VectorTileLayer | null = null
   private draw: Draw | null = null
   private modify: Modify | null = null
@@ -61,16 +67,17 @@ class MapController {
     this.map = new Map({
       target,
       controls: defaultControls({ attribution: false }).extend([attribution]),
-      layers: [
-        new VectorLayer({ source: this.highlightSource, style: highlightStyle, zIndex: 20 }),
-        new VectorLayer({ source: this.drawSource, style: drawStyle, zIndex: 30 }),
-      ],
+      layers: [this.highlightLayer, this.drawLayer],
       view: new View({ center: [0, 3_500_000], zoom: 2 }),
     })
 
     this.modify = new Modify({ source: this.drawSource })
     this.modify.on('modifyend', () => this.syncDrawnGeometry())
     this.map.addInteraction(this.modify)
+
+    if (useMockApi || import.meta.env.DEV) {
+      this.installTestHooks()
+    }
 
     if (!useMockApi) {
       const style = {
@@ -150,6 +157,8 @@ class MapController {
     this.drawnGeometry.value = null
   }
 
+  /// Preview mode shows ONLY the previewed archive: the region highlight and
+  /// drawn export polygon are hidden (not cleared) until the preview closes.
   setPreview(url: string | null) {
     if (!this.map) return
     if (this.previewLayer) {
@@ -157,7 +166,10 @@ class MapController {
       this.previewLayer = null
     }
     this.previewUrl.value = url
+    this.highlightLayer.setVisible(url === null)
+    this.drawLayer.setVisible(url === null)
     if (!url) return
+    this.stopDraw()
     this.previewLayer = new VectorTileLayer({
       declutter: false,
       source: new PMTilesVectorSource({ url }),
@@ -165,6 +177,18 @@ class MapController {
       zIndex: 10,
     })
     this.map.addLayer(this.previewLayer)
+  }
+
+  /// State probes for the Playwright suite (mock/dev builds only).
+  installTestHooks() {
+    const target = window as unknown as Record<string, unknown>
+    target.__pmtilesTest = {
+      previewUrl: () => this.previewUrl.value,
+      highlightLayerVisible: () => this.highlightLayer.getVisible(),
+      drawLayerVisible: () => this.drawLayer.getVisible(),
+      highlightCount: () => this.highlightSource.getFeatures().length,
+      drawnCount: () => this.drawSource.getFeatures().length,
+    }
   }
 
   private syncDrawnGeometry() {

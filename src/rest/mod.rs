@@ -25,27 +25,22 @@ use crate::error::ApiError;
 use crate::martin_embed::tiles_proxy;
 use crate::state::AppContext;
 
-/// Build the public router: API routes (job-creating ones behind the rate
-/// limiter), tile proxy, swagger docs, and the embedded SPA as the fallback.
-pub fn build_router(ctx: AppContext) -> Router {
-    let mut job_routes = Router::new()
-        .route("/api/v1/exports", post(exports::create_export))
-        .route("/api/v1/exports/estimate", post(exports::estimate_export))
-        .route(
-            "/api/v1/regions/{id}/extract",
-            post(regions::region_extract),
-        );
-
-    let limits = &ctx.config.limits;
+/// Wrap a route group in a per-client-IP rate limiter and spawn the janitor
+/// that prunes its per-key state.
+fn rate_limited(
+    routes: Router<AppContext>,
+    per_second: u64,
+    burst: u32,
+    label: &'static str,
+) -> Router<AppContext> {
     let governor = GovernorConfigBuilder::default()
-        .per_second(limits.rate_limit_per_second)
-        .burst_size(limits.rate_limit_burst)
+        .per_second(per_second)
+        .burst_size(burst)
         .key_extractor(rate_limit::CfIpKeyExtractor)
         .finish();
     match governor {
         Some(config) => {
             let config = Arc::new(config);
-            // The limiter accumulates per-key state; prune it periodically.
             let janitor = Arc::clone(&config);
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -54,10 +49,48 @@ pub fn build_router(ctx: AppContext) -> Router {
                     janitor.limiter().retain_recent();
                 }
             });
-            job_routes = job_routes.layer(GovernorLayer::new(config));
+            routes.layer(GovernorLayer::new(config))
         }
-        None => tracing::warn!("invalid rate limit config, flood control disabled"),
+        None => {
+            tracing::warn!(label, "invalid rate limit config, flood control disabled");
+            routes
+        }
     }
+}
+
+/// Build the public router: job creation behind an aggressive rate limiter,
+/// downloads and estimates behind a laxer one (ranged preview reads are
+/// chatty), plus the tile proxy, swagger docs and the embedded SPA fallback.
+pub fn build_router(ctx: AppContext) -> Router {
+    let limits = ctx.config.limits.clone();
+
+    let job_routes = rate_limited(
+        Router::new()
+            .route("/api/v1/exports", post(exports::create_export))
+            .route(
+                "/api/v1/regions/{id}/extract",
+                post(regions::region_extract),
+            ),
+        limits.job_rate_limit_per_second,
+        limits.job_rate_limit_burst,
+        "jobs",
+    );
+
+    let download_routes = rate_limited(
+        Router::new()
+            .route("/api/v1/exports/estimate", post(exports::estimate_export))
+            .route(
+                "/api/v1/regions/{id}/download",
+                get(download::download_region),
+            )
+            .route(
+                "/api/v1/exports/{id}/download",
+                get(download::download_export),
+            ),
+        limits.download_rate_limit_per_second,
+        limits.download_rate_limit_burst,
+        "downloads",
+    );
 
     let api = Router::new()
         .route("/health", get(health))
@@ -68,21 +101,14 @@ pub fn build_router(ctx: AppContext) -> Router {
             get(regions::region_geometry),
         )
         .route(
-            "/api/v1/regions/{id}/download",
-            get(download::download_region),
-        )
-        .route(
             "/api/v1/exports/{id}",
             get(exports::get_export).delete(exports::delete_export),
-        )
-        .route(
-            "/api/v1/exports/{id}/download",
-            get(download::download_export),
         )
         .route("/api/v1/status", get(status::status))
         .route("/tiles", any(tiles_proxy))
         .route("/tiles/{*path}", any(tiles_proxy))
         .merge(job_routes)
+        .merge(download_routes)
         .with_state(ctx);
 
     let swagger =

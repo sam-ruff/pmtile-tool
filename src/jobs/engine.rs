@@ -200,7 +200,7 @@ mod tests {
         );
         engine.spawn_workers();
 
-        let job = Job::new_custom("{}".into(), 10, 100, "1.1.1.1".into());
+        let job = Job::new_custom("t".into(), "{}".into(), 10, 100, "1.1.1.1".into());
         let id = job.id.clone();
         engine.enqueue(job).await.expect("enqueue");
 
@@ -266,7 +266,13 @@ mod tests {
 
         // A job that was mid-run.
         store
-            .insert(&Job::new_custom("{}".into(), 10, 100, "a".into()))
+            .insert(&Job::new_custom(
+                "t".into(),
+                "{}".into(),
+                10,
+                100,
+                "a".into(),
+            ))
             .await
             .expect("insert");
         store.claim_next_queued().await.expect("claim");

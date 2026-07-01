@@ -56,8 +56,8 @@ export class HttpPmtilesApi implements PmtilesApi {
     return request(`/api/v1/regions/${encodeURIComponent(id)}/extract`, { method: 'POST' })
   }
 
-  createExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<JobView> {
-    return request('/api/v1/exports', postJson({ geometry, maxzoom }))
+  createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView> {
+    return request('/api/v1/exports', postJson({ geometry, maxzoom, name }))
   }
 
   estimateExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<Estimate> {

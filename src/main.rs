@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.exports_dir(),
         config.region_cache_dir(),
         config.retention.region_cache_max_gb,
+        config.limits.exports_max_gb,
     );
 
     let (martin_server, martin_addr) = start_martin(&config).await?;

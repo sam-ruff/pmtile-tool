@@ -12,7 +12,7 @@ export interface PmtilesApi {
   regionDetail(id: string): Promise<RegionDetail>
   regionGeometry(id: string): Promise<GeoJSONGeometry>
   requestRegionExtract(id: string): Promise<JobView>
-  createExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<JobView>
+  createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView>
   estimateExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<Estimate>
   getExport(id: string): Promise<JobView>
   deleteExport(id: string): Promise<void>
