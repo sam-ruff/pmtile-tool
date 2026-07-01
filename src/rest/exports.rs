@@ -1,0 +1,377 @@
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use chrono::{Duration, Utc};
+use serde::Deserialize;
+
+use super::rate_limit::ClientIp;
+use super::views::JobView;
+use crate::error::ApiError;
+use crate::extract::estimate::{Estimate, estimate};
+use crate::extract::validate::validate_geometry;
+use crate::jobs::{Job, JobKind, JobStatus};
+use crate::state::AppContext;
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ExportRequestBody {
+    /// GeoJSON Polygon or MultiPolygon to cut the extract to.
+    #[schema(value_type = Object)]
+    pub geometry: geojson::Geometry,
+    /// Maximum zoom level included in the extract.
+    pub maxzoom: u8,
+}
+
+fn validated_estimate(ctx: &AppContext, body: &ExportRequestBody) -> Result<Estimate, ApiError> {
+    let limits = &ctx.config.limits;
+    if body.maxzoom < 1 || body.maxzoom > limits.max_maxzoom {
+        return Err(ApiError::Validation(format!(
+            "maxzoom must be between 1 and {}",
+            limits.max_maxzoom
+        )));
+    }
+    let multi = validate_geometry(&body.geometry, limits.max_polygon_vertices)
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
+    Ok(estimate(&multi, body.maxzoom, limits.avg_tile_bytes))
+}
+
+/// Estimate the size of an export without creating a job.
+#[utoipa::path(post, path = "/api/v1/exports/estimate", tag = "exports",
+    request_body = ExportRequestBody,
+    responses((status = 200, body = Estimate), (status = 400, description = "Invalid geometry")))]
+pub async fn estimate_export(
+    State(ctx): State<AppContext>,
+    Json(body): Json<ExportRequestBody>,
+) -> Result<Json<Estimate>, ApiError> {
+    Ok(Json(validated_estimate(&ctx, &body)?))
+}
+
+/// Create a custom polygon export job.
+#[utoipa::path(post, path = "/api/v1/exports", tag = "exports",
+    request_body = ExportRequestBody,
+    responses(
+        (status = 202, body = JobView),
+        (status = 400, description = "Invalid geometry or maxzoom"),
+        (status = 422, description = "Export too large"),
+        (status = 429, description = "Per-client quota exceeded"),
+        (status = 503, description = "Queue or disk full")))]
+pub async fn create_export(
+    State(ctx): State<AppContext>,
+    ClientIp(client): ClientIp,
+    Json(body): Json<ExportRequestBody>,
+) -> Result<(StatusCode, Json<JobView>), ApiError> {
+    let limits = &ctx.config.limits;
+    let ip = client
+        .ok_or_else(|| ApiError::Validation("client address unavailable".into()))?
+        .to_string();
+
+    let estimate = validated_estimate(&ctx, &body)?;
+    if estimate.tiles > limits.max_estimated_tiles {
+        return Err(ApiError::TooLarge {
+            estimated_tiles: estimate.tiles,
+            max_tiles: limits.max_estimated_tiles,
+        });
+    }
+
+    let free = crate::disk::free_bytes(&ctx.config.data_dir)?;
+    if free < estimate.bytes.saturating_mul(2) {
+        return Err(ApiError::Busy(
+            "not enough disk space for this export right now".into(),
+        ));
+    }
+
+    let hour_ago = Utc::now() - Duration::hours(1);
+    if ctx.store.count_for_ip_since(&ip, hour_ago).await? >= limits.jobs_per_ip_per_hour {
+        return Err(ApiError::RateLimited(format!(
+            "limit of {} export jobs per hour reached",
+            limits.jobs_per_ip_per_hour
+        )));
+    }
+    if ctx.store.active_for_ip(&ip).await? >= limits.active_jobs_per_ip {
+        return Err(ApiError::RateLimited(format!(
+            "limit of {} active export jobs reached",
+            limits.active_jobs_per_ip
+        )));
+    }
+    if ctx.store.queued_count().await? >= limits.queue_depth_max {
+        return Err(ApiError::Busy(
+            "export queue is full, try again later".into(),
+        ));
+    }
+
+    let geometry =
+        serde_json::to_string(&body.geometry).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let job = Job::new_custom(geometry, body.maxzoom, estimate.tiles, ip);
+    let view = JobView::from_job(&job);
+    ctx.engine.enqueue(job).await?;
+    Ok((StatusCode::ACCEPTED, Json(view)))
+}
+
+/// Fetch one export job.
+#[utoipa::path(get, path = "/api/v1/exports/{id}", tag = "exports",
+    params(("id" = String, Path, description = "Job id")),
+    responses((status = 200, body = JobView), (status = 404, description = "Unknown job")))]
+pub async fn get_export(
+    State(ctx): State<AppContext>,
+    Path(id): Path<String>,
+) -> Result<Json<JobView>, ApiError> {
+    let job = ctx
+        .store
+        .get(&id)
+        .await?
+        .filter(|j| j.kind == JobKind::Custom)
+        .ok_or_else(|| ApiError::NotFound(format!("unknown export job: {id}")))?;
+    Ok(Json(JobView::from_job(&job)))
+}
+
+/// Cancel a queued job or delete a finished one.
+#[utoipa::path(delete, path = "/api/v1/exports/{id}", tag = "exports",
+    params(("id" = String, Path, description = "Job id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "Unknown job"),
+        (status = 409, description = "Job is currently running")))]
+pub async fn delete_export(
+    State(ctx): State<AppContext>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let job = ctx
+        .store
+        .get(&id)
+        .await?
+        .filter(|j| j.kind == JobKind::Custom)
+        .ok_or_else(|| ApiError::NotFound(format!("unknown export job: {id}")))?;
+    if job.status == JobStatus::Running {
+        return Err(ApiError::Conflict("job is currently running".into()));
+    }
+    if let Some(path) = &job.file_path {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    ctx.store.delete(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+impl From<crate::jobs::store::StoreError> for ApiError {
+    fn from(e: crate::jobs::store::StoreError) -> Self {
+        Self::Internal(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration as StdDuration;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use crate::extract::{ExtractOutcome, MockPmtilesExtractor};
+    use crate::rest::build_router;
+    use crate::rest::test_util::{test_app, test_app_custom};
+
+    const SMALL_POLYGON: &str =
+        r#"{"type":"Polygon","coordinates":[[[0,0],[0.1,0],[0.1,0.1],[0,0.1],[0,0]]]}"#;
+
+    fn export_request(maxzoom: u8) -> Request<Body> {
+        Request::post("/api/v1/exports")
+            .header("cf-connecting-ip", "203.0.113.7")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!(
+                r#"{{"geometry":{SMALL_POLYGON},"maxzoom":{maxzoom}}}"#
+            )))
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn full_export_flow_with_ranged_download() {
+        let mut extractor = MockPmtilesExtractor::new();
+        extractor.expect_extract().times(1).returning(|req| {
+            std::fs::write(&req.output, b"pmtiles-test-bytes").expect("write");
+            Ok(ExtractOutcome {
+                file_size: 18,
+                duration: StdDuration::from_millis(1),
+            })
+        });
+        let app = test_app_custom(extractor, true, |_| {}).await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router
+            .clone()
+            .oneshot(export_request(10))
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let job: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let id = job["id"].as_str().expect("id").to_string();
+        assert_eq!(job["status"], "queued");
+
+        let mut done = false;
+        for _ in 0..100 {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::get(format!("/api/v1/exports/{id}"))
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let body = resp.into_body().collect().await.expect("body").to_bytes();
+            let view: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            if view["status"] == "done" {
+                assert_eq!(view["file_size"], 18);
+                assert!(view["download_url"].as_str().is_some());
+                done = true;
+                break;
+            }
+            tokio::time::sleep(StdDuration::from_millis(20)).await;
+        }
+        assert!(done, "job never completed");
+
+        // Ranged request must yield 206 partial content (pmtiles preview path).
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/exports/{id}/download"))
+                    .header(header::RANGE, "bytes=0-3")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+        let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+        assert_eq!(&bytes[..], b"pmti");
+
+        let resp = router
+            .oneshot(
+                Request::get(format!("/api/v1/exports/{id}/download"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let disposition = resp
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .expect("disposition")
+            .to_string();
+        assert!(disposition.contains(".pmtiles"));
+    }
+
+    #[tokio::test]
+    async fn oversized_export_rejected_with_estimate() {
+        let app = test_app_custom(MockPmtilesExtractor::new(), false, |c| {
+            c.limits.max_estimated_tiles = 10;
+        })
+        .await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router.oneshot(export_request(15)).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let error: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert!(error["estimated_tiles"].as_u64().expect("estimate") > 10);
+        assert_eq!(error["max_tiles"], 10);
+    }
+
+    #[tokio::test]
+    async fn active_job_quota_enforced() {
+        let app = test_app().await;
+        let router = build_router(app.ctx.clone());
+
+        for _ in 0..2 {
+            let resp = router
+                .clone()
+                .oneshot(export_request(10))
+                .await
+                .expect("response");
+            assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        }
+        let resp = router.oneshot(export_request(10)).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn invalid_geometry_rejected() {
+        let app = test_app().await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router
+            .oneshot(
+                Request::post("/api/v1/exports")
+                    .header("cf-connecting-ip", "203.0.113.7")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"geometry":{"type":"Point","coordinates":[0,0]},"maxzoom":10}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn estimate_endpoint_returns_numbers() {
+        let app = test_app().await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router
+            .oneshot(
+                Request::post("/api/v1/exports/estimate")
+                    .header("cf-connecting-ip", "203.0.113.7")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"geometry":{SMALL_POLYGON},"maxzoom":12}}"#
+                    )))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let estimate: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert!(estimate["tiles"].as_u64().expect("tiles") > 0);
+        assert!(estimate["bytes"].as_u64().expect("bytes") > 0);
+    }
+
+    #[tokio::test]
+    async fn delete_cancels_queued_job() {
+        let app = test_app().await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router
+            .clone()
+            .oneshot(export_request(10))
+            .await
+            .expect("response");
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        let job: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let id = job["id"].as_str().expect("id").to_string();
+
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::delete(format!("/api/v1/exports/{id}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let resp = router
+            .oneshot(
+                Request::get(format!("/api/v1/exports/{id}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}
