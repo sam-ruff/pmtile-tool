@@ -1,6 +1,7 @@
 {
   "name": "pmtile-tool-release",
   "private": true,
+  "packageManager": "pnpm@10.30.3",
   "devDependencies": {
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",

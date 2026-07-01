@@ -1,6 +1,6 @@
 FROM node:22-slim AS ui
 WORKDIR /app/frontend
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
