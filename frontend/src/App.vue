@@ -4,6 +4,7 @@ import { mapController } from './map/controller'
 import { useJobsStore } from './stores/jobs'
 import { useRegionsStore } from './stores/regions'
 import RegionsPanel from './components/RegionsPanel.vue'
+import RegionDetailCard from './components/RegionDetailCard.vue'
 import ExportPanel from './components/ExportPanel.vue'
 import JobsPanel from './components/JobsPanel.vue'
 
@@ -34,6 +35,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="app">
     <div ref="mapEl" class="map" />
+
+    <RegionDetailCard />
 
     <aside class="panel" :class="{ closed: !panelOpen }">
       <header class="panel-header">

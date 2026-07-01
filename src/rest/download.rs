@@ -8,7 +8,7 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use crate::error::ApiError;
-use crate::jobs::{JobKind, JobStatus};
+use crate::jobs::{JobKind, JobStatus, filename_for};
 use crate::state::AppContext;
 
 /// Download a finished custom export (supports HTTP range requests, which the
@@ -85,7 +85,7 @@ async fn serve_job_file(
         .map_err(|e| ApiError::Internal(format!("failed to serve file: {e}")))?;
     let mut response = response.map(Body::new);
 
-    let disposition = format!("attachment; filename=\"{id}.pmtiles\"");
+    let disposition = format!("attachment; filename=\"{}\"", filename_for(&job));
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         response.headers_mut().insert(CONTENT_DISPOSITION, value);
     }

@@ -10,6 +10,8 @@ pub struct JobView {
     pub kind: JobKind,
     pub status: JobStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub region_id: Option<String>,
     pub maxzoom: u8,
     pub estimated_tiles: u64,
@@ -38,6 +40,7 @@ impl JobView {
             id: job.id.clone(),
             kind: job.kind,
             status: job.status,
+            name: job.name.clone(),
             region_id: job.region_id.clone(),
             maxzoom: job.maxzoom,
             estimated_tiles: job.estimated_tiles,

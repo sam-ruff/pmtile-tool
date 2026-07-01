@@ -63,15 +63,41 @@ const REGIONS: MockRegion[] = [
   },
 ]
 
-/// Simulated job lifecycle so the whole UI works with no backend.
+const MOCK_JOBS_KEY = 'pmtile-tool:mock-jobs'
+
+/// Simulated job lifecycle so the whole UI works with no backend. Jobs are
+/// persisted to localStorage so reloads behave like the real backend.
 export class MockPmtilesApi implements PmtilesApi {
   private jobs = new Map<string, JobView>()
   private counter = 0
 
+  constructor() {
+    try {
+      const raw = localStorage.getItem(MOCK_JOBS_KEY)
+      if (raw) {
+        this.jobs = new Map(JSON.parse(raw) as [string, JobView][])
+        this.counter = this.jobs.size
+      }
+    } catch {
+      // storage unavailable; jobs just will not survive reloads
+    }
+  }
+
+  private persist() {
+    try {
+      localStorage.setItem(MOCK_JOBS_KEY, JSON.stringify([...this.jobs.entries()]))
+    } catch {
+      // ignore
+    }
+  }
+
   private advance(id: string, sizeBytes: number) {
     setTimeout(() => {
       const job = this.jobs.get(id)
-      if (job && job.status === 'queued') this.jobs.set(id, { ...job, status: 'running' })
+      if (job && job.status === 'queued') {
+        this.jobs.set(id, { ...job, status: 'running' })
+        this.persist()
+      }
     }, 1200)
     setTimeout(() => {
       const job = this.jobs.get(id)
@@ -87,6 +113,7 @@ export class MockPmtilesApi implements PmtilesApi {
               ? `/api/v1/exports/${id}/download`
               : `/api/v1/regions/${id}/download`,
         })
+        this.persist()
       }
     }, 3500)
   }
@@ -122,11 +149,12 @@ export class MockPmtilesApi implements PmtilesApi {
       created_at: new Date().toISOString(),
     }
     this.jobs.set(id, job)
+    this.persist()
     this.advance(id, 48_000_000)
     return job
   }
 
-  async createExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<JobView> {
+  async createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView> {
     const estimate = await this.estimateExport(geometry, maxzoom)
     if (estimate.tiles > 100_000_000) {
       throw new ApiRequestError(422, 'export too large', estimate.tiles, 100_000_000)
@@ -137,11 +165,13 @@ export class MockPmtilesApi implements PmtilesApi {
       id,
       kind: 'custom',
       status: 'queued',
+      name: name?.trim() || `mock-ridge-${this.counter}`,
       maxzoom,
       estimated_tiles: estimate.tiles,
       created_at: new Date().toISOString(),
     }
     this.jobs.set(id, job)
+    this.persist()
     this.advance(id, estimate.bytes)
     return job
   }
@@ -178,6 +208,7 @@ export class MockPmtilesApi implements PmtilesApi {
 
   async deleteExport(id: string): Promise<void> {
     if (!this.jobs.delete(id)) throw new ApiRequestError(404, `unknown export job: ${id}`)
+    this.persist()
   }
 
   async status(): Promise<StatusView> {

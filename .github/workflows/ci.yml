@@ -98,6 +98,12 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end tests (mock mode)
+        run: pnpm test:e2e
+
   release:
     needs: [backend-tests, frontend-tests]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')

@@ -150,7 +150,13 @@ mod tests {
     async fn success_moves_file_and_marks_done() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(dir.path());
-        let job = Job::new_custom("{\"type\":\"Polygon\"}".into(), 10, 100, "1.1.1.1".into());
+        let job = Job::new_custom(
+            "t".into(),
+            "{\"type\":\"Polygon\"}".into(),
+            10,
+            100,
+            "1.1.1.1".into(),
+        );
         let job_id = job.id.clone();
 
         let mut extractor = MockPmtilesExtractor::new();
@@ -247,7 +253,7 @@ mod tests {
     async fn extract_failure_marks_failed_and_cleans_up() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(dir.path());
-        let job = Job::new_custom("{}".into(), 10, 100, "1.1.1.1".into());
+        let job = Job::new_custom("t".into(), "{}".into(), 10, 100, "1.1.1.1".into());
         let job_id = job.id.clone();
 
         let mut extractor = MockPmtilesExtractor::new();

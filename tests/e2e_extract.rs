@@ -115,6 +115,7 @@ async fn full_export_pipeline_with_real_extractor() {
         .clone()
         .oneshot(
             Request::get(format!("/api/v1/exports/{id}/download"))
+                .header("cf-connecting-ip", "203.0.113.9")
                 .header(header::RANGE, "bytes=0-6")
                 .body(Body::empty())
                 .expect("request"),
@@ -128,6 +129,7 @@ async fn full_export_pipeline_with_real_extractor() {
     let resp = router
         .oneshot(
             Request::get(format!("/api/v1/exports/{id}/download"))
+                .header("cf-connecting-ip", "203.0.113.9")
                 .body(Body::empty())
                 .expect("request"),
         )
