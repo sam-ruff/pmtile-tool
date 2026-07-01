@@ -5,6 +5,8 @@ use serde::Serialize;
 
 use super::views::JobView;
 use crate::error::ApiError;
+use crate::extract::estimate::{Estimate, estimate};
+use crate::extract::validate::to_multipolygon;
 use crate::jobs::{Job, JobKind, JobStatus};
 use crate::regions::RegionSummary;
 use crate::state::AppContext;
@@ -104,7 +106,22 @@ pub async fn region_extract(
         }
     }
 
-    if ctx.store.queued_count().await? >= ctx.config.limits.queue_depth_max {
+    let limits = &ctx.config.limits;
+    let maxzoom = limits.max_maxzoom;
+
+    // A region whose extract could never fit the whole budget is refused
+    // outright so it cannot blow past the disk boundary.
+    let est = to_multipolygon(&region.geometry)
+        .map(|m| estimate(&m, maxzoom, limits.avg_tile_bytes))
+        .unwrap_or(Estimate { tiles: 0, bytes: 0 });
+    if est.bytes > limits.data_budget_bytes() {
+        return Err(ApiError::TooLarge {
+            estimated_tiles: est.tiles,
+            max_tiles: limits.data_budget_bytes() / limits.avg_tile_bytes.max(1),
+        });
+    }
+
+    if ctx.store.queued_count().await? >= limits.queue_depth_max {
         return Err(ApiError::Busy(
             "export queue is full, try again later".into(),
         ));
@@ -114,9 +131,32 @@ pub async fn region_extract(
     if existing.is_some() {
         ctx.store.delete(&id).await?;
     }
+
+    // Evict least-recently-used outputs to keep the shared budget, counting
+    // in-flight reservations so concurrent work cannot over-commit it.
+    let reserved = ctx
+        .store
+        .reserved_tiles()
+        .await?
+        .saturating_mul(limits.avg_tile_bytes);
+    let outcome = crate::jobs::cleanup::evict_to_fit(
+        ctx.store.as_ref(),
+        &ctx.config.exports_dir(),
+        &ctx.config.region_cache_dir(),
+        limits.data_budget_bytes(),
+        reserved,
+        est.bytes,
+    )
+    .await?;
+    if !outcome.fits {
+        return Err(ApiError::Busy(
+            "storage is busy with other extracts right now, try again shortly".into(),
+        ));
+    }
+
     let geometry =
         serde_json::to_string(&region.geometry).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let job = Job::new_region(id, geometry, ctx.config.limits.max_maxzoom, false);
+    let job = Job::new_region(id, geometry, maxzoom, est.tiles, false);
     let view = JobView::from_job(&job);
     ctx.engine.enqueue(job).await?;
     Ok((StatusCode::ACCEPTED, Json(view)))
@@ -129,10 +169,11 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    use crate::extract::MockPmtilesExtractor;
     use crate::jobs::JobStatus;
     use crate::jobs::store::JobStore;
     use crate::rest::build_router;
-    use crate::rest::test_util::test_app;
+    use crate::rest::test_util::{test_app, test_app_custom};
 
     #[tokio::test]
     async fn lists_regions() {
@@ -228,6 +269,29 @@ mod tests {
             .expect("response");
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(app.store.queued_count().await.expect("count"), 1);
+    }
+
+    #[tokio::test]
+    async fn region_extract_too_large_for_budget_rejected() {
+        // A zero-byte data budget makes any region too large to ever fit, so
+        // the extract is refused rather than allowed to break the boundary.
+        let app = test_app_custom(MockPmtilesExtractor::new(), false, |c| {
+            c.limits.data_budget_gb = 0;
+        })
+        .await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router
+            .oneshot(
+                Request::post("/api/v1/regions/england/extract")
+                    .header("cf-connecting-ip", "203.0.113.5")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(app.store.get("england").await.expect("get").is_none());
     }
 
     #[tokio::test]

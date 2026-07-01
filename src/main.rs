@@ -56,14 +56,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.recover().await?;
     engine.spawn_workers();
     engine
-        .seed(&regions, &config.seed_regions, config.limits.max_maxzoom)
+        .seed(
+            &regions,
+            &config.seed_regions,
+            config.limits.max_maxzoom,
+            config.limits.avg_tile_bytes,
+        )
         .await?;
     spawn_sweeper(
         store.clone(),
         config.exports_dir(),
         config.region_cache_dir(),
-        config.retention.region_cache_max_gb,
-        config.limits.exports_max_gb,
+        config.limits.data_budget_gb,
     );
 
     let (martin_server, martin_addr) = start_martin(&config).await?;

@@ -11,22 +11,47 @@ use super::{JobStatus, StatusDetail};
 const SWEEP_INTERVAL: StdDuration = StdDuration::from_secs(300);
 pub const GIB: u64 = 1024 * 1024 * 1024;
 
-/// Evict done custom exports (least recently downloaded first) until the
-/// exports dir plus `incoming_bytes` fits the budget. Lets a burst of new
-/// export requests push old files out instead of being refused.
-pub async fn evict_exports_to_fit(
+/// Result of an eviction pass.
+#[derive(Debug, Default, PartialEq)]
+pub struct EvictOutcome {
+    /// Number of finished outputs deleted to make room.
+    pub evicted: usize,
+    /// Whether the committed footprint fits the budget after evicting.
+    pub fits: bool,
+}
+
+/// Evict finished outputs (custom exports and non-pinned region caches),
+/// least recently used first across both pools, until the on-disk footprint
+/// plus in-flight reservations and this job's `incoming_bytes` fits the budget.
+///
+/// `reserved_bytes` covers queued/running jobs whose output is not yet on disk,
+/// so concurrent work cannot over-commit the budget. A burst of new jobs pushes
+/// old files out rather than being refused; only a job that cannot fit even
+/// after evicting everything evictable comes back with `fits == false`.
+pub async fn evict_to_fit(
     store: &dyn JobStore,
     exports_dir: &Path,
+    region_cache_dir: &Path,
     budget_bytes: u64,
+    reserved_bytes: u64,
     incoming_bytes: u64,
-) -> Result<usize, StoreError> {
-    let mut size = crate::disk::dir_size(exports_dir).unwrap_or(0);
-    if size.saturating_add(incoming_bytes) <= budget_bytes {
-        return Ok(0);
+) -> Result<EvictOutcome, StoreError> {
+    let mut on_disk = crate::disk::dir_size(exports_dir).unwrap_or(0)
+        + crate::disk::dir_size(region_cache_dir).unwrap_or(0);
+    let committed = |on_disk: u64| {
+        on_disk
+            .saturating_add(reserved_bytes)
+            .saturating_add(incoming_bytes)
+    };
+    if committed(on_disk) <= budget_bytes {
+        return Ok(EvictOutcome {
+            evicted: 0,
+            fits: true,
+        });
     }
     let mut evicted = 0;
-    for job in store.evictable_custom_jobs().await? {
-        if size.saturating_add(incoming_bytes) <= budget_bytes {
+    for job in store.evictable_jobs().await? {
+        if committed(on_disk) <= budget_bytes {
             break;
         }
         let Some(path) = job.file_path.clone() else {
@@ -40,10 +65,13 @@ pub async fn evict_exports_to_fit(
         store
             .update_status(&job.id, JobStatus::Expired, StatusDetail::default())
             .await?;
-        size = size.saturating_sub(file_size);
+        on_disk = on_disk.saturating_sub(file_size);
         evicted += 1;
     }
-    Ok(evicted)
+    Ok(EvictOutcome {
+        evicted,
+        fits: committed(on_disk) <= budget_bytes,
+    })
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -54,14 +82,15 @@ pub struct SweepReport {
     pub lost_files_marked: usize,
 }
 
-/// One sweep: expire TTL'd exports, evict least-recently-used region files
-/// when the cache exceeds its budget, and reconcile db rows vs files on disk.
+/// One sweep: expire TTL'd exports, evict least-recently-used finished outputs
+/// when the combined writable footprint exceeds the budget, and reconcile db
+/// rows vs files on disk. This is the periodic backstop for the reservation
+/// accounting done at job-creation time.
 pub async fn sweep_once(
     store: &dyn JobStore,
     exports_dir: &Path,
     region_cache_dir: &Path,
-    region_cache_max_gb: u64,
-    exports_max_gb: u64,
+    data_budget_gb: u64,
 ) -> Result<SweepReport, StoreError> {
     let mut report = SweepReport::default();
     let now = Utc::now();
@@ -76,32 +105,17 @@ pub async fn sweep_once(
         report.expired += 1;
     }
 
-    // LRU eviction when the region cache exceeds its budget.
-    let budget = region_cache_max_gb.saturating_mul(GIB);
-    let mut cache_size = crate::disk::dir_size(region_cache_dir).unwrap_or(0);
-    if cache_size > budget {
-        for job in store.evictable_region_jobs().await? {
-            if cache_size <= budget {
-                break;
-            }
-            let Some(path) = job.file_path.clone() else {
-                continue;
-            };
-            let size = tokio::fs::metadata(&path)
-                .await
-                .map(|m| m.len())
-                .unwrap_or(0);
-            let _ = tokio::fs::remove_file(&path).await;
-            store
-                .update_status(&job.id, JobStatus::Expired, StatusDetail::default())
-                .await?;
-            cache_size = cache_size.saturating_sub(size);
-            report.evicted += 1;
-        }
-    }
-
-    report.evicted +=
-        evict_exports_to_fit(store, exports_dir, exports_max_gb.saturating_mul(GIB), 0).await?;
+    // Enforce the combined budget against what is actually on disk.
+    let outcome = evict_to_fit(
+        store,
+        exports_dir,
+        region_cache_dir,
+        data_budget_gb.saturating_mul(GIB),
+        0,
+        0,
+    )
+    .await?;
+    report.evicted += outcome.evicted;
 
     // Reconcile: done rows must have files; files must have done rows.
     let done = store.done_jobs().await?;
@@ -144,8 +158,7 @@ pub fn spawn_sweeper(
     store: Arc<dyn JobStore>,
     exports_dir: std::path::PathBuf,
     region_cache_dir: std::path::PathBuf,
-    region_cache_max_gb: u64,
-    exports_max_gb: u64,
+    data_budget_gb: u64,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(SWEEP_INTERVAL);
@@ -155,8 +168,7 @@ pub fn spawn_sweeper(
                 store.as_ref(),
                 &exports_dir,
                 &region_cache_dir,
-                region_cache_max_gb,
-                exports_max_gb,
+                data_budget_gb,
             )
             .await
             {
@@ -195,7 +207,7 @@ mod tests {
         std::fs::write(&path, vec![0u8; 10]).expect("write file");
         let mut job = match kind {
             JobKind::Custom => Job::new_custom(id.into(), "{}".into(), 10, 1, "ip".into()),
-            JobKind::Region => Job::new_region(id.into(), "{}".into(), 15, pinned),
+            JobKind::Region => Job::new_region(id.into(), "{}".into(), 15, 1, pinned),
         };
         if kind == JobKind::Custom {
             job.id = id.to_string();
@@ -221,7 +233,7 @@ mod tests {
             done_job(&store, "old", JobKind::Custom, &exports, Some(-1), false).await;
         done_job(&store, "fresh", JobKind::Custom, &exports, Some(24), false).await;
 
-        let report = sweep_once(&store, &exports, &cache, 200, 20)
+        let report = sweep_once(&store, &exports, &cache, 200)
             .await
             .expect("sweep");
         assert_eq!(report.expired, 1);
@@ -255,7 +267,7 @@ mod tests {
 
         // Budget zero forces eviction of everything evictable, oldest first;
         // the pinned europe file must survive.
-        let report = sweep_once(&store, &exports, &cache, 0, 20)
+        let report = sweep_once(&store, &exports, &cache, 0)
             .await
             .expect("sweep");
         assert!(report.evicted >= 1);
@@ -270,7 +282,9 @@ mod tests {
     async fn new_exports_push_out_least_recently_downloaded() {
         let dir = tempfile::tempdir().expect("tempdir");
         let exports = dir.path().join("exports");
+        let cache = dir.path().join("region-cache");
         std::fs::create_dir_all(&exports).expect("dirs");
+        std::fs::create_dir_all(&cache).expect("dirs");
         let store = SqliteJobStore::open_in_memory().await.expect("store");
 
         let oldest = done_job(&store, "first", JobKind::Custom, &exports, Some(24), false).await;
@@ -282,10 +296,11 @@ mod tests {
 
         // Two 10-byte files on disk; an incoming 15-byte job against a
         // 25-byte budget must evict exactly the least recently used one.
-        let evicted = evict_exports_to_fit(&store, &exports, 25, 15)
+        let outcome = evict_to_fit(&store, &exports, &cache, 25, 0, 15)
             .await
             .expect("evict");
-        assert_eq!(evicted, 1);
+        assert_eq!(outcome.evicted, 1);
+        assert!(outcome.fits);
         assert!(!Path::new(&oldest).exists());
         assert_eq!(
             store.get("first").await.expect("get").expect("job").status,
@@ -297,10 +312,46 @@ mod tests {
         );
 
         // Fits without eviction: nothing else is touched.
-        let evicted = evict_exports_to_fit(&store, &exports, 25, 5)
+        let outcome = evict_to_fit(&store, &exports, &cache, 25, 0, 5)
             .await
             .expect("evict");
-        assert_eq!(evicted, 0);
+        assert_eq!(outcome.evicted, 0);
+        assert!(outcome.fits);
+    }
+
+    #[tokio::test]
+    async fn evicts_across_both_pools_and_reports_no_fit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exports = dir.path().join("exports");
+        let cache = dir.path().join("region-cache");
+        std::fs::create_dir_all(&exports).expect("dirs");
+        std::fs::create_dir_all(&cache).expect("dirs");
+        let store = SqliteJobStore::open_in_memory().await.expect("store");
+
+        // One finished export and one non-pinned region, plus a pinned seed.
+        let export = done_job(&store, "exp", JobKind::Custom, &exports, Some(24), false).await;
+        let region = done_job(&store, "england", JobKind::Region, &cache, None, false).await;
+        let pinned = done_job(&store, "europe", JobKind::Region, &cache, None, true).await;
+        store
+            .touch_download("england", Utc::now())
+            .await
+            .expect("touch");
+
+        // 30 bytes on disk across the pools; a 25-byte budget with a 20-byte
+        // reservation must evict from both pools, oldest first, and the pinned
+        // seed must survive even though that leaves the job unable to fit.
+        let outcome = evict_to_fit(&store, &exports, &cache, 25, 20, 0)
+            .await
+            .expect("evict");
+        assert_eq!(outcome.evicted, 2);
+        assert!(!outcome.fits);
+        assert!(!Path::new(&export).exists());
+        assert!(!Path::new(&region).exists());
+        assert!(Path::new(&pinned).exists());
+        assert_eq!(
+            store.get("europe").await.expect("get").expect("job").status,
+            JobStatus::Done
+        );
     }
 
     #[tokio::test]
@@ -318,7 +369,7 @@ mod tests {
         // File with no row.
         std::fs::write(exports.join("orphan.pmtiles"), b"x").expect("write");
 
-        let report = sweep_once(&store, &exports, &cache, 200, 20)
+        let report = sweep_once(&store, &exports, &cache, 200)
             .await
             .expect("sweep");
         assert_eq!(report.lost_files_marked, 1);

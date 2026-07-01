@@ -77,36 +77,16 @@ pub async fn create_export(
             max_tiles: limits.max_estimated_tiles,
         });
     }
-
-    // The exports directory has a fixed disk budget: new jobs push the least
-    // recently downloaded old files out rather than being refused.
-    let budget = limits
-        .exports_max_gb
-        .saturating_mul(crate::jobs::cleanup::GIB);
-    if estimate.bytes > budget {
-        return Err(ApiError::Validation(format!(
-            "estimated size exceeds the whole exports budget of {}GB",
-            limits.exports_max_gb
-        )));
-    }
-    let evicted = crate::jobs::cleanup::evict_exports_to_fit(
-        ctx.store.as_ref(),
-        &ctx.config.exports_dir(),
-        budget,
-        estimate.bytes,
-    )
-    .await?;
-    if evicted > 0 {
-        tracing::info!(evicted, "evicted old exports to fit a new job");
+    // A single custom export may never exceed its hard size ceiling.
+    if estimate.bytes > limits.max_custom_export_bytes() {
+        return Err(ApiError::TooLarge {
+            estimated_tiles: estimate.tiles,
+            max_tiles: limits.max_custom_export_bytes() / limits.avg_tile_bytes.max(1),
+        });
     }
 
-    let free = crate::disk::free_bytes(&ctx.config.data_dir)?;
-    if free < estimate.bytes.saturating_mul(2) {
-        return Err(ApiError::Busy(
-            "not enough disk space for this export right now".into(),
-        ));
-    }
-
+    // Per-client quotas are checked before any side effects so a rejected
+    // request never evicts another user's files.
     let hour_ago = Utc::now() - Duration::hours(1);
     if ctx.store.count_for_ip_since(&ip, hour_ago).await? >= limits.jobs_per_ip_per_hour {
         return Err(ApiError::RateLimited(format!(
@@ -123,6 +103,44 @@ pub async fn create_export(
     if ctx.store.queued_count().await? >= limits.queue_depth_max {
         return Err(ApiError::Busy(
             "export queue is full, try again later".into(),
+        ));
+    }
+
+    // All writable extracts share one disk budget. New jobs push the least
+    // recently used finished outputs out to make room rather than being
+    // refused; reservations for in-flight jobs are counted so the budget
+    // cannot be over-committed.
+    let budget = limits.data_budget_bytes();
+    let reserved = ctx
+        .store
+        .reserved_tiles()
+        .await?
+        .saturating_mul(limits.avg_tile_bytes);
+    let outcome = crate::jobs::cleanup::evict_to_fit(
+        ctx.store.as_ref(),
+        &ctx.config.exports_dir(),
+        &ctx.config.region_cache_dir(),
+        budget,
+        reserved,
+        estimate.bytes,
+    )
+    .await?;
+    if outcome.evicted > 0 {
+        tracing::info!(
+            evicted = outcome.evicted,
+            "evicted old outputs to fit a new job"
+        );
+    }
+    if !outcome.fits {
+        return Err(ApiError::Busy(
+            "storage is busy with other extracts right now, try again shortly".into(),
+        ));
+    }
+
+    let free = crate::disk::free_bytes(&ctx.config.data_dir)?;
+    if free < estimate.bytes.saturating_mul(2) {
+        return Err(ApiError::Busy(
+            "not enough disk space for this export right now".into(),
         ));
     }
 
@@ -306,6 +324,21 @@ mod tests {
         let error: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert!(error["estimated_tiles"].as_u64().expect("estimate") > 10);
         assert_eq!(error["max_tiles"], 10);
+    }
+
+    #[tokio::test]
+    async fn export_over_size_cap_rejected() {
+        // A zero-GB per-export ceiling makes any non-empty export too large,
+        // exercising the hard custom-export size cap independently of the tile
+        // count limit.
+        let app = test_app_custom(MockPmtilesExtractor::new(), false, |c| {
+            c.limits.max_custom_export_gb = 0;
+        })
+        .await;
+        let router = build_router(app.ctx.clone());
+
+        let resp = router.oneshot(export_request(12)).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

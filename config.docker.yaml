@@ -8,7 +8,8 @@ seed_regions:
   - england
 limits:
   max_maxzoom: 15
-  max_estimated_tiles: 100000000
+  max_estimated_tiles: 150000000
+  max_custom_export_gb: 10
   max_polygon_vertices: 1000
   jobs_per_ip_per_hour: 5
   active_jobs_per_ip: 2
@@ -20,8 +21,10 @@ limits:
   job_rate_limit_burst: 3
   download_rate_limit_per_second: 20
   download_rate_limit_burst: 100
-  exports_max_gb: 20
+  # Total writable extract budget (custom exports + cached regions), excluding
+  # the planet archive. New jobs evict the least-recently-used finished outputs
+  # to stay within this, so a flood of requests can only push out old files.
+  data_budget_gb: 70
 retention:
   export_ttl_hours: 48
   region_ttl_hours: 48
-  region_cache_max_gb: 200
