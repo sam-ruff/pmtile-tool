@@ -18,11 +18,13 @@ scripts/dev-data.sh --uk     # UK at higher zoom for county-level testing
 Run the backend and frontend side by side:
 
 ```sh
-cargo run                    # API + tiles on :8080
-cd frontend && pnpm dev      # Vite dev server, proxies /api and /tiles
+cargo run                    # API, tiles and embedded UI on http://localhost:8080
+cd frontend && pnpm dev      # hot-reload dev server on http://localhost:5173, proxies /api and /tiles
 ```
 
 `pnpm dev:mock` runs the frontend with an in-browser mock API, no backend needed.
+
+Swagger lives at `http://localhost:8080/swagger-ui/`, a liveness check at `/health`. `cargo run` reads an optional `config.yaml` (gitignored) that overrides defaults such as the listen addresses, the go-pmtiles binary path (`go_pmtiles_bin: bin/pmtiles` after dev-data.sh) and the seeded regions - see `config.docker.yaml` for the full set of keys.
 
 To serve the frontend from the Rust binary, `scripts/sync-ui.sh` builds it into `static/`, which `build.rs` embeds at compile time.
 
