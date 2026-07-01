@@ -1,0 +1,24 @@
+listen: 0.0.0.0:8080
+martin_listen: 127.0.0.1:3111
+data_dir: /data
+go_pmtiles_bin: /usr/local/bin/pmtiles
+regions_index: /app/assets/geofabrik-index-v1.json
+seed_regions:
+  - united-kingdom
+  - england
+limits:
+  max_maxzoom: 15
+  max_estimated_tiles: 100000000
+  max_polygon_vertices: 1000
+  jobs_per_ip_per_hour: 5
+  active_jobs_per_ip: 2
+  queue_depth_max: 20
+  max_concurrent_extracts: 1
+  extract_timeout_minutes: 60
+  avg_tile_bytes: 85
+  rate_limit_per_second: 5
+  rate_limit_burst: 20
+retention:
+  export_ttl_hours: 48
+  region_ttl_hours: 48
+  region_cache_max_gb: 200

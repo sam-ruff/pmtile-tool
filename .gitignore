@@ -1,0 +1,11 @@
+/target
+/data
+/config.yaml
+/static/*
+!/static/.gitkeep
+frontend/node_modules
+frontend/dist
+frontend/.vite
+bin/
+.env
+node_modules

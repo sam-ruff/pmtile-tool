@@ -1,0 +1,177 @@
+@import 'ol/ol.css';
+
+:root {
+  --primary: #0f766e;
+  --primary-dark: #115e59;
+  --primary-light: #ccfbf1;
+  --accent: #ea580c;
+  --preview: #7c3aed;
+  --text: #1c1917;
+  --text-muted: #78716c;
+  --surface: #ffffff;
+  --surface-alt: #f5f5f4;
+  --border: #e7e5e4;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(28, 25, 23, 0.1), 0 4px 16px rgba(28, 25, 23, 0.08);
+  font-family: 'Noto Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  height: 100dvh;
+}
+
+button {
+  font: inherit;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn {
+  padding: 8px 16px;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-dark);
+}
+
+.btn-ghost {
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.btn-danger-ghost {
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--danger);
+}
+
+.btn-danger-ghost:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+input[type='text'],
+input[type='search'] {
+  font: inherit;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+input[type='text']:focus,
+input[type='search']:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -1px;
+  border-color: var(--primary);
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  vertical-align: -2px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-queued {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.badge-running {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.badge-done {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.badge-failed,
+.badge-expired {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ol-attribution {
+  font-size: 11px;
+}

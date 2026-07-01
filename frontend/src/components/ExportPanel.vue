@@ -1,0 +1,162 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { api } from '../api'
+import type { Estimate } from '../api'
+import { formatBytes, formatCount } from '../format'
+import { mapController } from '../map/controller'
+import { useJobsStore } from '../stores/jobs'
+
+const jobs = useJobsStore()
+
+const maxzoom = ref(12)
+const estimate = ref<Estimate | null>(null)
+const estimateError = ref<string | null>(null)
+const estimating = ref(false)
+const submitted = ref(false)
+
+const drawn = computed(() => mapController.drawnGeometry.value)
+const drawMode = computed(() => mapController.drawMode.value)
+
+let debounce: number | null = null
+
+watch([drawn, maxzoom], () => {
+  estimate.value = null
+  estimateError.value = null
+  if (!drawn.value) return
+  // A fresh drawing starts a new export; clearing after submit keeps the note.
+  submitted.value = false
+  if (debounce !== null) window.clearTimeout(debounce)
+  debounce = window.setTimeout(refreshEstimate, 300)
+})
+
+async function refreshEstimate() {
+  if (!drawn.value) return
+  estimating.value = true
+  try {
+    estimate.value = await api().estimateExport(drawn.value, maxzoom.value)
+    estimateError.value = null
+  } catch (e) {
+    estimateError.value = e instanceof Error ? e.message : 'estimate failed'
+  } finally {
+    estimating.value = false
+  }
+}
+
+async function submit() {
+  if (!drawn.value) return
+  const job = await jobs.createExport(drawn.value, maxzoom.value)
+  if (job) {
+    submitted.value = true
+    mapController.clearDrawn()
+  }
+}
+</script>
+
+<template>
+  <div class="export">
+    <p class="muted intro">
+      Draw an area on the map, pick a maximum zoom level, and export it as a .pmtiles archive.
+      Exports stay downloadable for 48 hours.
+    </p>
+
+    <div class="draw-buttons">
+      <button
+        class="btn"
+        :class="{ active: drawMode === 'polygon' }"
+        @click="mapController.startDraw('polygon')"
+      >
+        Draw polygon
+      </button>
+      <button
+        class="btn"
+        :class="{ active: drawMode === 'rectangle' }"
+        @click="mapController.startDraw('rectangle')"
+      >
+        Draw rectangle
+      </button>
+      <button class="btn-ghost" :disabled="!drawn && !drawMode" @click="mapController.clearDrawn()">
+        Clear
+      </button>
+    </div>
+
+    <p v-if="drawMode" class="muted">Click the map to draw. Double-click to finish a polygon.</p>
+    <p v-else-if="!drawn" class="muted">No area drawn yet.</p>
+    <p v-else class="muted">Area drawn. Drag its edges to adjust it.</p>
+
+    <label class="zoom-label" for="maxzoom">
+      Max zoom: <strong>{{ maxzoom }}</strong>
+      <span class="muted zoom-hint">{{
+        maxzoom <= 8 ? 'regional overview' : maxzoom <= 12 ? 'town level' : 'street level'
+      }}</span>
+    </label>
+    <input id="maxzoom" v-model.number="maxzoom" type="range" min="1" max="15" step="1" />
+
+    <div v-if="drawn" class="estimate">
+      <span v-if="estimating" class="muted"><span class="spinner" /> Estimating...</span>
+      <template v-else-if="estimate">
+        <span class="muted">Estimated size</span>
+        <strong>{{ formatBytes(estimate.bytes) }}</strong>
+        <span class="muted">({{ formatCount(estimate.tiles) }} tiles)</span>
+      </template>
+      <span v-else-if="estimateError" class="error-text">{{ estimateError }}</span>
+    </div>
+
+    <button class="btn-primary" :disabled="!drawn || jobs.creating" @click="submit">
+      <span v-if="jobs.creating" class="spinner" />
+      Create export job
+    </button>
+
+    <p v-if="jobs.createError" class="error-text">{{ jobs.createError }}</p>
+    <p v-else-if="submitted" class="success-note">
+      Export queued. Track it in the Jobs tab; the download appears there when ready.
+    </p>
+  </div>
+</template>
+
+<style scoped>
+.export {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intro {
+  margin: 0;
+}
+
+.draw-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn.active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.zoom-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.zoom-hint {
+  margin-left: auto;
+}
+
+.estimate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+}
+
+.success-note {
+  color: var(--success);
+  font-size: 13px;
+  margin: 0;
+}
+</style>

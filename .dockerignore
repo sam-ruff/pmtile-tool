@@ -1,0 +1,10 @@
+target
+data
+bin
+static
+frontend/node_modules
+frontend/dist
+frontend/.vite
+.git
+.github
+node_modules
