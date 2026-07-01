@@ -18,6 +18,20 @@ pub enum ValidationError {
     Invalid(String),
 }
 
+/// Convert a trusted GeoJSON geometry (a catalog region) to a geo
+/// MultiPolygon, skipping the user-facing vertex cap. Returns None for
+/// non-polygonal geometry or coordinates that cannot be converted.
+pub fn to_multipolygon(geometry: &geojson::Geometry) -> Option<MultiPolygon> {
+    match &geometry.value {
+        GeometryValue::Polygon { .. } => {
+            let polygon: Polygon = (&geometry.value).try_into().ok()?;
+            Some(MultiPolygon(vec![polygon]))
+        }
+        GeometryValue::MultiPolygon { .. } => (&geometry.value).try_into().ok(),
+        _ => None,
+    }
+}
+
 /// Validate a user-supplied GeoJSON geometry for use as an extract region.
 pub fn validate_geometry(
     geometry: &geojson::Geometry,

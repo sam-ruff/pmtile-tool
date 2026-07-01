@@ -211,7 +211,7 @@ mod tests {
     async fn pinned_region_job_never_expires() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(dir.path());
-        let job = Job::new_region("europe".into(), "{}".into(), 15, true);
+        let job = Job::new_region("europe".into(), "{}".into(), 15, 0, true);
 
         let mut extractor = MockPmtilesExtractor::new();
         extractor.expect_extract().times(1).returning(|req| {

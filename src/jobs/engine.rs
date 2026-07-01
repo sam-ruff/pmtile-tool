@@ -79,6 +79,7 @@ impl JobEngine {
         regions: &RegionCatalog,
         seed_ids: &[String],
         maxzoom: u8,
+        avg_tile_bytes: u64,
     ) -> Result<(), StoreError> {
         for id in seed_ids {
             let Some(region) = regions.get(id) else {
@@ -98,11 +99,20 @@ impl JobEngine {
             }
             let geometry = serde_json::to_string(&region.geometry)
                 .map_err(|e| StoreError::Db(format!("seed geometry serialisation: {e}")))?;
+            let estimated_tiles = crate::extract::validate::to_multipolygon(&region.geometry)
+                .map(|m| crate::extract::estimate::estimate(&m, maxzoom, avg_tile_bytes).tiles)
+                .unwrap_or(0);
             // Replace any stale (failed/expired) row before re-inserting.
             self.store.delete(id).await?;
             tracing::info!(region = id, "seeding region extract");
-            self.enqueue(Job::new_region(id.clone(), geometry, maxzoom, true))
-                .await?;
+            self.enqueue(Job::new_region(
+                id.clone(),
+                geometry,
+                maxzoom,
+                estimated_tiles,
+                true,
+            ))
+            .await?;
         }
         Ok(())
     }
@@ -233,7 +243,7 @@ mod tests {
 
         let regions = test_regions();
         engine
-            .seed(&regions, &["europe".into(), "atlantis".into()], 15)
+            .seed(&regions, &["europe".into(), "atlantis".into()], 15, 85)
             .await
             .expect("seed");
 
@@ -244,7 +254,7 @@ mod tests {
 
         // Seeding again while queued must not duplicate or replace.
         engine
-            .seed(&regions, &["europe".into()], 15)
+            .seed(&regions, &["europe".into()], 15, 85)
             .await
             .expect("seed again");
         assert_eq!(store.queued_count().await.expect("count"), 1);
@@ -278,7 +288,7 @@ mod tests {
         store.claim_next_queued().await.expect("claim");
 
         // A done job whose file is gone.
-        let mut lost = Job::new_region("europe".into(), "{}".into(), 15, false);
+        let mut lost = Job::new_region("europe".into(), "{}".into(), 15, 0, false);
         lost.status = JobStatus::Done;
         lost.file_path = Some(
             dir.path()

@@ -39,13 +39,16 @@ pub trait JobStore: Send + Sync {
     async fn active_for_ip(&self, ip: &str) -> Result<u32, StoreError>;
     async fn queued_count(&self) -> Result<u32, StoreError>;
     async fn running_count(&self) -> Result<u32, StoreError>;
+    /// Estimated tiles committed by jobs that are queued or running but whose
+    /// output is not yet on disk. Multiplied by avg_tile_bytes this reserves
+    /// budget for in-flight work so it cannot be over-committed.
+    async fn reserved_tiles(&self) -> Result<u64, StoreError>;
     async fn touch_download(&self, id: &str, at: DateTime<Utc>) -> Result<(), StoreError>;
     /// Done jobs whose expires_at has passed.
     async fn expired_jobs(&self, now: DateTime<Utc>) -> Result<Vec<Job>, StoreError>;
-    /// Non-pinned done region jobs, least recently downloaded first.
-    async fn evictable_region_jobs(&self) -> Result<Vec<Job>, StoreError>;
-    /// Done custom exports, least recently downloaded first (disk budget eviction).
-    async fn evictable_custom_jobs(&self) -> Result<Vec<Job>, StoreError>;
+    /// Evictable finished outputs (custom exports and non-pinned region caches)
+    /// across both pools, least recently used first, for disk-budget eviction.
+    async fn evictable_jobs(&self) -> Result<Vec<Job>, StoreError>;
     /// All done jobs (startup file verification and cache size accounting).
     async fn done_jobs(&self) -> Result<Vec<Job>, StoreError>;
     /// Move any running jobs back to queued (startup crash recovery).
@@ -244,6 +247,16 @@ impl JobStore for SqliteJobStore {
         Ok(count as u32)
     }
 
+    async fn reserved_tiles(&self) -> Result<u64, StoreError> {
+        let tiles: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(estimated_tiles), 0) FROM jobs \
+             WHERE status IN ('queued', 'running')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(tiles.max(0) as u64)
+    }
+
     async fn touch_download(&self, id: &str, at: DateTime<Utc>) -> Result<(), StoreError> {
         sqlx::query("UPDATE jobs SET last_download_at = ? WHERE id = ?")
             .bind(at)
@@ -263,19 +276,11 @@ impl JobStore for SqliteJobStore {
         rows.iter().map(job_from_row).collect()
     }
 
-    async fn evictable_region_jobs(&self) -> Result<Vec<Job>, StoreError> {
+    async fn evictable_jobs(&self) -> Result<Vec<Job>, StoreError> {
+        // Custom exports are never pinned, so `pinned = 0` keeps every finished
+        // export while dropping only the pinned seed regions.
         let rows = sqlx::query(
-            "SELECT * FROM jobs WHERE kind = 'region' AND status = 'done' AND pinned = 0 \
-             ORDER BY COALESCE(last_download_at, finished_at, created_at) ASC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.iter().map(job_from_row).collect()
-    }
-
-    async fn evictable_custom_jobs(&self) -> Result<Vec<Job>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT * FROM jobs WHERE kind = 'custom' AND status = 'done' \
+            "SELECT * FROM jobs WHERE status = 'done' AND pinned = 0 \
              ORDER BY COALESCE(last_download_at, finished_at, created_at) ASC",
         )
         .fetch_all(&self.pool)
@@ -418,11 +423,11 @@ mod tests {
         expired.expires_at = Some(now - chrono::Duration::hours(1));
         store.insert(&expired).await.expect("insert");
 
-        let mut pinned_region = Job::new_region("europe".into(), "{}".into(), 15, true);
+        let mut pinned_region = Job::new_region("europe".into(), "{}".into(), 15, 0, true);
         pinned_region.status = JobStatus::Done;
         store.insert(&pinned_region).await.expect("insert");
 
-        let mut lazy_region = Job::new_region("england".into(), "{}".into(), 15, false);
+        let mut lazy_region = Job::new_region("england".into(), "{}".into(), 15, 0, false);
         lazy_region.status = JobStatus::Done;
         store.insert(&lazy_region).await.expect("insert");
 
@@ -430,9 +435,37 @@ mod tests {
         assert_eq!(expired_jobs.len(), 1);
         assert_eq!(expired_jobs[0].id, expired.id);
 
-        let evictable = store.evictable_region_jobs().await.expect("evictable");
-        assert_eq!(evictable.len(), 1);
-        assert_eq!(evictable[0].id, "england");
+        // Evictable set spans both pools: the finished custom export and the
+        // non-pinned region, but never the pinned seed region.
+        let evictable = store.evictable_jobs().await.expect("evictable");
+        let ids: Vec<&str> = evictable.iter().map(|j| j.id.as_str()).collect();
+        assert!(ids.contains(&expired.id.as_str()));
+        assert!(ids.contains(&"england"));
+        assert!(!ids.contains(&"europe"));
+    }
+
+    #[tokio::test]
+    async fn reserved_tiles_sums_active_jobs() {
+        let store = SqliteJobStore::open_in_memory().await.expect("open");
+        // Queued + running count toward reservations; done does not.
+        store
+            .insert(&Job::new_custom(
+                "a".into(),
+                "{}".into(),
+                10,
+                1000,
+                "ip".into(),
+            ))
+            .await
+            .expect("insert");
+        let mut running = Job::new_custom("b".into(), "{}".into(), 10, 500, "ip".into());
+        running.status = JobStatus::Running;
+        store.insert(&running).await.expect("insert");
+        let mut done = Job::new_custom("c".into(), "{}".into(), 10, 9999, "ip".into());
+        done.status = JobStatus::Done;
+        store.insert(&done).await.expect("insert");
+
+        assert_eq!(store.reserved_tiles().await.expect("reserved"), 1500);
     }
 
     #[tokio::test]

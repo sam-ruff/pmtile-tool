@@ -102,7 +102,13 @@ impl Job {
     }
 
     /// A freshly queued region extract job (id = region id).
-    pub fn new_region(region_id: String, geometry: String, maxzoom: u8, pinned: bool) -> Self {
+    pub fn new_region(
+        region_id: String,
+        geometry: String,
+        maxzoom: u8,
+        estimated_tiles: u64,
+        pinned: bool,
+    ) -> Self {
         Self {
             id: region_id.clone(),
             kind: JobKind::Region,
@@ -112,7 +118,7 @@ impl Job {
             region_id: Some(region_id),
             geometry,
             maxzoom,
-            estimated_tiles: 0,
+            estimated_tiles,
             file_path: None,
             file_size: None,
             error: None,
