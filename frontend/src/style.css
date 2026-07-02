@@ -175,3 +175,21 @@ input[type='range'] {
 .ol-attribution {
   font-size: 11px;
 }
+
+/* The default zoom control sits top-left, under the side panel. Move it to the
+   bottom-right, lifted clear of the attribution line. */
+.ol-zoom {
+  top: auto;
+  left: auto;
+  right: 8px;
+  bottom: 28px;
+}
+
+@media (max-width: 720px) {
+  /* On mobile the bottom holds the sheet and floating card, so the map is only
+     clear at the top-right. */
+  .ol-zoom {
+    top: 8px;
+    bottom: auto;
+  }
+}

@@ -8,7 +8,11 @@ import { useJobsStore } from '../stores/jobs'
 
 const jobs = useJobsStore()
 
-const maxzoom = ref(12)
+// Default to the highest zoom so exports include buildings (z13+) and
+// street-level labels (z14+); the slider still lets users drop it lower.
+const MAX_ZOOM = 15
+
+const maxzoom = ref(MAX_ZOOM)
 const jobName = ref('')
 const estimate = ref<Estimate | null>(null)
 const estimateError = ref<string | null>(null)
@@ -91,7 +95,7 @@ async function submit() {
         maxzoom <= 8 ? 'regional overview' : maxzoom <= 12 ? 'town level' : 'street level'
       }}</span>
     </label>
-    <input id="maxzoom" v-model.number="maxzoom" type="range" min="1" max="15" step="1" />
+    <input id="maxzoom" v-model.number="maxzoom" type="range" min="1" :max="MAX_ZOOM" step="1" />
 
     <div v-if="drawn" class="estimate">
       <span v-if="estimating" class="muted"><span class="spinner" /> Estimating...</span>
