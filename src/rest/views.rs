@@ -28,6 +28,10 @@ pub struct JobView {
     /// HTTP range requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub download_url: Option<String>,
+    /// Geographic bounds [west, south, east, north] in lon/lat, so the UI can
+    /// outline and zoom to the extract area.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<[f64; 4]>,
 }
 
 impl JobView {
@@ -50,6 +54,35 @@ impl JobView {
             finished_at: job.finished_at,
             expires_at: job.expires_at,
             download_url,
+            bounds: bounds_of(&job.geometry),
         }
+    }
+}
+
+/// Bounding box [west, south, east, north] of a stored GeoJSON geometry.
+fn bounds_of(geometry: &str) -> Option<[f64; 4]> {
+    use geo::BoundingRect;
+    let geom: geojson::Geometry = serde_json::from_str(geometry).ok()?;
+    let rect = crate::extract::validate::to_multipolygon(&geom)?.bounding_rect()?;
+    Some([rect.min().x, rect.min().y, rect.max().x, rect.max().y])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounds_of;
+
+    #[test]
+    fn bounds_of_polygon_is_its_extent() {
+        let geometry = r#"{"type":"Polygon","coordinates":[[[-0.16,51.49],[-0.11,51.49],[-0.11,51.52],[-0.16,51.52],[-0.16,51.49]]]}"#;
+        let b = bounds_of(geometry).expect("bounds");
+        assert!((b[0] - -0.16).abs() < 1e-9);
+        assert!((b[1] - 51.49).abs() < 1e-9);
+        assert!((b[2] - -0.11).abs() < 1e-9);
+        assert!((b[3] - 51.52).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bounds_of_invalid_geometry_is_none() {
+        assert!(bounds_of("not json").is_none());
     }
 }

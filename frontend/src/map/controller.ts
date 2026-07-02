@@ -6,8 +6,10 @@ import GeoJSON from 'ol/format/GeoJSON'
 import VectorLayer from 'ol/layer/Vector'
 import VectorTileLayer from 'ol/layer/VectorTile'
 import VectorSource from 'ol/source/Vector'
+import { fromExtent } from 'ol/geom/Polygon'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import Modify from 'ol/interaction/Modify'
+import { transformExtent } from 'ol/proj'
 import { Fill, Stroke, Style } from 'ol/style'
 import { defaults as defaultControls, Attribution } from 'ol/control'
 import { apply, applyStyle } from 'ol-mapbox-style'
@@ -29,6 +31,11 @@ const highlightStyle = new Style({
 const drawStyle = new Style({
   stroke: new Stroke({ color: '#ea580c', width: 2, lineDash: [6, 6] }),
   fill: new Fill({ color: 'rgba(234, 88, 12, 0.08)' }),
+})
+
+const previewOutlineStyle = new Style({
+  stroke: new Stroke({ color: '#0f766e', width: 2, lineDash: [6, 6] }),
+  fill: new Fill({ color: 'rgba(15, 118, 110, 0.04)' }),
 })
 
 /// Build the Protomaps gl style for a given source id, so both the planet
@@ -53,6 +60,12 @@ class MapController {
     zIndex: 20,
   })
   private drawLayer = new VectorLayer({ source: this.drawSource, style: drawStyle, zIndex: 30 })
+  private previewOutlineSource = new VectorSource()
+  private previewOutlineLayer = new VectorLayer({
+    source: this.previewOutlineSource,
+    style: previewOutlineStyle,
+    zIndex: 25,
+  })
   private previewLayer: VectorTileLayer | null = null
   private draw: Draw | null = null
   private modify: Modify | null = null
@@ -68,7 +81,7 @@ class MapController {
     this.map = new Map({
       target,
       controls: defaultControls({ attribution: false }).extend([attribution]),
-      layers: [this.highlightLayer, this.drawLayer],
+      layers: [this.highlightLayer, this.drawLayer, this.previewOutlineLayer],
       view: new View({ center: [0, 3_500_000], zoom: 2 }),
     })
 
@@ -160,17 +173,25 @@ class MapController {
 
   /// Preview mode shows ONLY the previewed archive: the region highlight and
   /// drawn export polygon are hidden (not cleared) until the preview closes.
-  setPreview(url: string | null) {
+  /// When bounds are given, the area is outlined and the view zooms to it so
+  /// the export is always visible regardless of the current map position.
+  setPreview(url: string | null, bounds?: [number, number, number, number]) {
     if (!this.map) return
     if (this.previewLayer) {
       this.map.removeLayer(this.previewLayer)
       this.previewLayer = null
     }
+    this.previewOutlineSource.clear()
     this.previewUrl.value = url
     this.highlightLayer.setVisible(url === null)
     this.drawLayer.setVisible(url === null)
     if (!url) return
     this.stopDraw()
+    if (bounds) {
+      const extent = transformExtent(bounds, 'EPSG:4326', 'EPSG:3857')
+      this.previewOutlineSource.addFeature(new Feature({ geometry: fromExtent(extent) }))
+      this.map.getView().fit(extent, { padding: [56, 56, 56, 56], maxZoom: 14, duration: 300 })
+    }
     // Declutter so labels from the export tiles place without overlapping.
     this.previewLayer = new VectorTileLayer({
       declutter: true,
