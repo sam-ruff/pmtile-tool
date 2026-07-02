@@ -78,9 +78,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .region-card {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 280px;
+  bottom: var(--card-bottom, 24px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 320px;
+  max-width: calc(100vw - 16px);
   padding: 16px;
   background: var(--surface);
   border-radius: 12px;
@@ -88,7 +90,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 10;
+  z-index: 40;
 }
 
 .region-card header {
@@ -118,10 +120,11 @@ onBeforeUnmount(() => {
 
 @media (max-width: 720px) {
   .region-card {
-    top: 8px;
     left: 8px;
     right: 8px;
     width: auto;
+    max-width: none;
+    transform: none;
   }
 }
 </style>
