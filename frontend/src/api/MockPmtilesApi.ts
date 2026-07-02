@@ -31,6 +31,26 @@ function box(minLon: number, minLat: number, maxLon: number, maxLat: number): Ge
   }
 }
 
+function boundsOf(geometry: GeoJSONGeometry): [number, number, number, number] {
+  const rings =
+    geometry.type === 'Polygon'
+      ? (geometry.coordinates as number[][][])
+      : (geometry.coordinates as number[][][][]).flat()
+  let w = Infinity
+  let s = Infinity
+  let e = -Infinity
+  let n = -Infinity
+  for (const ring of rings) {
+    for (const [lon, lat] of ring) {
+      w = Math.min(w, lon)
+      e = Math.max(e, lon)
+      s = Math.min(s, lat)
+      n = Math.max(n, lat)
+    }
+  }
+  return [w, s, e, n]
+}
+
 const REGIONS: MockRegion[] = [
   { summary: { id: 'europe', name: 'Europe', has_children: true }, geometry: box(-11, 35, 32, 61) },
   {
@@ -139,6 +159,7 @@ export class MockPmtilesApi implements PmtilesApi {
     if (existing && existing.status !== 'failed' && existing.status !== 'expired') {
       return existing
     }
+    const region = REGIONS.find((r) => r.summary.id === id)
     const job: JobView = {
       id,
       kind: 'region',
@@ -147,6 +168,7 @@ export class MockPmtilesApi implements PmtilesApi {
       maxzoom: 15,
       estimated_tiles: 0,
       created_at: new Date().toISOString(),
+      bounds: region ? boundsOf(region.geometry) : undefined,
     }
     this.jobs.set(id, job)
     this.persist()
@@ -169,6 +191,7 @@ export class MockPmtilesApi implements PmtilesApi {
       maxzoom,
       estimated_tiles: estimate.tiles,
       created_at: new Date().toISOString(),
+      bounds: boundsOf(geometry),
     }
     this.jobs.set(id, job)
     this.persist()

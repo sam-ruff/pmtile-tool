@@ -16,6 +16,8 @@ export interface JobView {
   finished_at?: string
   expires_at?: string
   download_url?: string
+  // [west, south, east, north] in lon/lat.
+  bounds?: [number, number, number, number]
 }
 
 export interface RegionSummary {

@@ -20,7 +20,10 @@ function togglePreview(job: JobView) {
   if (isPreviewing(job)) {
     mapController.setPreview(null)
   } else {
-    mapController.setPreview(new URL(job.download_url, window.location.origin).toString())
+    mapController.setPreview(
+      new URL(job.download_url, window.location.origin).toString(),
+      job.bounds,
+    )
   }
 }
 
