@@ -13,6 +13,15 @@ test('browsing the tree selects a region and generates its extract', async ({ pa
   await expect(card.getByRole('heading', { name: 'United Kingdom' })).toBeVisible()
   expect((await mapState(page)).highlightCount).toBe(1)
 
+  // The card floats horizontally centred near the bottom of the map.
+  const box = await card.boundingBox()
+  const vp = page.viewportSize()
+  expect(box).not.toBeNull()
+  if (box && vp) {
+    expect(Math.abs(box.x + box.width / 2 - vp.width / 2)).toBeLessThan(20)
+    expect(box.y + box.height).toBeGreaterThan(vp.height * 0.6)
+  }
+
   // Generate: queued -> done with a download link (mock finishes in seconds).
   await card.getByRole('button', { name: 'Generate extract' }).click()
   await expect(card.getByRole('link', { name: /Download/ })).toBeVisible({ timeout: 10_000 })

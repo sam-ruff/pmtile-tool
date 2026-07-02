@@ -11,6 +11,7 @@ import JobsPanel from './components/JobsPanel.vue'
 type Tab = 'regions' | 'export' | 'jobs'
 
 const mapEl = ref<HTMLElement | null>(null)
+const panelEl = ref<HTMLElement | null>(null)
 const tab = ref<Tab>('regions')
 const panelOpen = ref(true)
 
@@ -19,9 +20,31 @@ const regions = useRegionsStore()
 
 const jobsBadge = computed(() => jobs.activeCount)
 
+// Floating map cards sit bottom-centre. On mobile the panel is a bottom sheet,
+// so lift them clear of its measured height; on desktop it is a side panel and
+// a small fixed offset is enough.
+const isMobile = ref(false)
+const sheetHeight = ref(0)
+const cardBottom = computed(() => (isMobile.value ? `${sheetHeight.value + 12}px` : '24px'))
+
+let mq: MediaQueryList | null = null
+let ro: ResizeObserver | null = null
+function updateMobile() {
+  isMobile.value = mq?.matches ?? false
+}
+
 onMounted(() => {
   if (mapEl.value) {
     mapController.init(mapEl.value)
+  }
+  mq = window.matchMedia('(max-width: 720px)')
+  updateMobile()
+  mq.addEventListener('change', updateMobile)
+  if (panelEl.value) {
+    ro = new ResizeObserver(() => {
+      sheetHeight.value = panelEl.value?.offsetHeight ?? 0
+    })
+    ro.observe(panelEl.value)
   }
   void regions.load()
   void jobs.load()
@@ -29,16 +52,18 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mapController.destroy()
+  mq?.removeEventListener('change', updateMobile)
+  ro?.disconnect()
 })
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :style="{ '--card-bottom': cardBottom }">
     <div ref="mapEl" class="map" />
 
     <RegionDetailCard />
 
-    <aside class="panel" :class="{ closed: !panelOpen }">
+    <aside ref="panelEl" class="panel" :class="{ closed: !panelOpen }">
       <header class="panel-header">
         <h1>PMTiles Extract Tool</h1>
         <button
@@ -95,6 +120,7 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   box-shadow: var(--shadow);
   overflow: hidden;
+  z-index: 20;
 }
 
 .panel.closed {
