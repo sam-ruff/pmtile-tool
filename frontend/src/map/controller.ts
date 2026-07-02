@@ -180,7 +180,12 @@ class MapController {
     this.map.addLayer(this.previewLayer)
     // Style the export with the same Protomaps layers as the basemap so the
     // preview shows roads, labels and buildings rather than flat outlines.
-    applyStyle(this.previewLayer, protomapsStyle('preview'), 'preview').catch((e: unknown) => {
+    // updateSource:false keeps the existing PMTiles source instead of trying
+    // to rebuild it from the (source-less) style definition.
+    applyStyle(this.previewLayer, protomapsStyle('preview'), {
+      source: 'preview',
+      updateSource: false,
+    }).catch((e: unknown) => {
       console.error('failed to style export preview', e)
     })
   }
