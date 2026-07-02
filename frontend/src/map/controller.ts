@@ -9,9 +9,8 @@ import VectorSource from 'ol/source/Vector'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import Modify from 'ol/interaction/Modify'
 import { Fill, Stroke, Style } from 'ol/style'
-import CircleStyle from 'ol/style/Circle'
 import { defaults as defaultControls, Attribution } from 'ol/control'
-import { apply } from 'ol-mapbox-style'
+import { apply, applyStyle } from 'ol-mapbox-style'
 import { PMTilesVectorSource } from 'ol-pmtiles'
 import { layers, namedFlavor } from '@protomaps/basemaps'
 
@@ -32,14 +31,16 @@ const drawStyle = new Style({
   fill: new Fill({ color: 'rgba(234, 88, 12, 0.08)' }),
 })
 
-const previewStyle = new Style({
-  stroke: new Stroke({ color: '#7c3aed', width: 1 }),
-  fill: new Fill({ color: 'rgba(124, 58, 237, 0.06)' }),
-  image: new CircleStyle({
-    radius: 2.5,
-    fill: new Fill({ color: '#7c3aed' }),
-  }),
-})
+/// Build the Protomaps gl style for a given source id, so both the planet
+/// basemap and an export preview render with identical roads/labels/buildings.
+function protomapsStyle(source: string) {
+  return {
+    version: 8,
+    sprite: `${window.location.origin}/basemaps-assets/sprites/v4/light`,
+    sources: { [source]: { type: 'vector' as const } },
+    layers: layers(source, namedFlavor('light'), { lang: 'en' }),
+  }
+}
 
 /// Singleton controller wiring the OpenLayers map to the panels.
 class MapController {
@@ -170,13 +171,18 @@ class MapController {
     this.drawLayer.setVisible(url === null)
     if (!url) return
     this.stopDraw()
+    // Declutter so labels from the export tiles place without overlapping.
     this.previewLayer = new VectorTileLayer({
-      declutter: false,
+      declutter: true,
       source: new PMTilesVectorSource({ url }),
-      style: previewStyle,
       zIndex: 10,
     })
     this.map.addLayer(this.previewLayer)
+    // Style the export with the same Protomaps layers as the basemap so the
+    // preview shows roads, labels and buildings rather than flat outlines.
+    applyStyle(this.previewLayer, protomapsStyle('preview'), 'preview').catch((e: unknown) => {
+      console.error('failed to style export preview', e)
+    })
   }
 
   /// State probes for the Playwright suite (mock/dev builds only).
