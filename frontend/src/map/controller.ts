@@ -3,21 +3,25 @@ import Feature from 'ol/Feature'
 import Map from 'ol/Map'
 import View from 'ol/View'
 import GeoJSON from 'ol/format/GeoJSON'
+import MVT from 'ol/format/MVT'
 import VectorLayer from 'ol/layer/Vector'
 import VectorTileLayer from 'ol/layer/VectorTile'
 import VectorSource from 'ol/source/Vector'
+import VectorTileSource from 'ol/source/VectorTile'
 import { fromExtent } from 'ol/geom/Polygon'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import Modify from 'ol/interaction/Modify'
 import { transformExtent } from 'ol/proj'
 import { Fill, Stroke, Style } from 'ol/style'
 import { defaults as defaultControls, Attribution } from 'ol/control'
-import { apply, applyStyle } from 'ol-mapbox-style'
+import { applyBackground, applyStyle } from 'ol-mapbox-style'
 import { PMTilesVectorSource } from 'ol-pmtiles'
-import { layers, namedFlavor } from '@protomaps/basemaps'
+import { namedFlavor } from '@protomaps/basemaps'
 
 import { useMockApi } from '../api'
 import type { GeoJSONGeometry } from '../api'
+import { glStyleForFlavour } from './flavours'
+import type { ResolvedMapStyle } from './flavours'
 
 export type DrawMode = 'polygon' | 'rectangle'
 
@@ -38,20 +42,21 @@ const previewOutlineStyle = new Style({
   fill: new Fill({ color: 'rgba(15, 118, 110, 0.04)' }),
 })
 
-/// Build the Protomaps gl style for a given source id, so both the planet
-/// basemap and an export preview render with identical roads/labels/buildings.
-function protomapsStyle(source: string) {
-  return {
-    version: 8,
-    sprite: `${window.location.origin}/basemaps-assets/sprites/v4/light`,
-    sources: { [source]: { type: 'vector' as const } },
-    layers: layers(source, namedFlavor('light'), { lang: 'en' }),
-  }
+const defaultStyle: ResolvedMapStyle = {
+  id: 'light',
+  name: 'Light',
+  base: 'light',
+  overrides: {},
+  flavor: namedFlavor('light'),
 }
 
 /// Singleton controller wiring the OpenLayers map to the panels.
 class MapController {
   private map: Map | null = null
+  private basemapLayer: VectorTileLayer | null = null
+  private currentStyle: ResolvedMapStyle = defaultStyle
+  private styleSeq = 0
+  private stylePromise: Promise<void> = Promise.resolve()
   private highlightSource = new VectorSource()
   private drawSource = new VectorSource()
   private highlightLayer = new VectorLayer({
@@ -94,29 +99,77 @@ class MapController {
     }
 
     if (!useMockApi) {
-      const style = {
-        version: 8,
-        sprite: `${window.location.origin}/basemaps-assets/sprites/v4/light`,
-        sources: {
-          planet: {
-            type: 'vector',
-            tiles: [`${window.location.origin}/tiles/planet/{z}/{x}/{y}`],
-            maxzoom: 15,
-            attribution:
-              '© <a href="https://openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> · <a href="https://protomaps.com" target="_blank">Protomaps</a>',
-          },
-        },
-        layers: layers('planet', namedFlavor('light'), { lang: 'en' }),
-      }
-      apply(this.map, style).catch((e: unknown) => {
-        console.error('failed to apply basemap style', e)
+      // A persistent layer (rather than ol-mapbox-style apply()) so switching
+      // styles only swaps the style function and keeps the tile cache. The
+      // attribution lives on the source because applyStyle with
+      // updateSource:false never reads the gl style's source definition.
+      this.basemapLayer = new VectorTileLayer({
+        declutter: true,
+        zIndex: 0,
+        source: new VectorTileSource({
+          format: new MVT(),
+          urls: [`${window.location.origin}/tiles/planet/{z}/{x}/{y}`],
+          maxZoom: 15,
+          attributions:
+            '© <a href="https://openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> · <a href="https://protomaps.com" target="_blank">Protomaps</a>',
+        }),
       })
+      this.map.addLayer(this.basemapLayer)
     }
+    this.applyCurrentStyle()
+  }
+
+  /// Restyle the whole map (basemap and any active preview). Callable before
+  /// init; the stored style is applied once the map exists.
+  setMapStyle(style: ResolvedMapStyle) {
+    this.currentStyle = style
+    this.applyCurrentStyle()
+  }
+
+  /// Style applications are queued so rapid switches settle on the latest
+  /// choice: applyStyle is async and two in-flight calls on one layer would
+  /// otherwise finish in either order. Stale queue entries are skipped.
+  private applyCurrentStyle() {
+    const seq = ++this.styleSeq
+    this.stylePromise = this.stylePromise
+      .then(async () => {
+        if (seq !== this.styleSeq) return
+        const { flavor, base } = this.currentStyle
+        if (this.basemapLayer) {
+          const glStyle = glStyleForFlavour('planet', flavor, base)
+          await applyStyle(this.basemapLayer, glStyle, {
+            source: 'planet',
+            updateSource: false,
+          })
+          // On the layer (never the map: that stacks background layers).
+          await applyBackground(this.basemapLayer, glStyle)
+        }
+        if (this.previewLayer) {
+          this.stylePreviewLayer(this.previewLayer)
+        }
+      })
+      .catch((e: unknown) => {
+        console.error('failed to apply map style', e)
+      })
+  }
+
+  /// The preview gets the same flavour but no background, which would cover
+  /// the basemap around the export bounds.
+  private stylePreviewLayer(layer: VectorTileLayer) {
+    const { flavor, base } = this.currentStyle
+    applyStyle(layer, glStyleForFlavour('preview', flavor, base), {
+      source: 'preview',
+      updateSource: false,
+    }).catch((e: unknown) => {
+      console.error('failed to style export preview', e)
+    })
   }
 
   destroy() {
     this.map?.setTarget(undefined)
     this.map = null
+    this.basemapLayer = null
+    this.previewLayer = null
   }
 
   highlightRegion(geometry: GeoJSONGeometry | null, fit = true) {
@@ -203,12 +256,7 @@ class MapController {
     // preview shows roads, labels and buildings rather than flat outlines.
     // updateSource:false keeps the existing PMTiles source instead of trying
     // to rebuild it from the (source-less) style definition.
-    applyStyle(this.previewLayer, protomapsStyle('preview'), {
-      source: 'preview',
-      updateSource: false,
-    }).catch((e: unknown) => {
-      console.error('failed to style export preview', e)
-    })
+    this.stylePreviewLayer(this.previewLayer)
   }
 
   /// State probes for the Playwright suite (mock/dev builds only).
@@ -220,6 +268,9 @@ class MapController {
       drawLayerVisible: () => this.drawLayer.getVisible(),
       highlightCount: () => this.highlightSource.getFeatures().length,
       drawnCount: () => this.drawSource.getFeatures().length,
+      styleId: () => this.currentStyle.id,
+      styleBackground: () => this.currentStyle.flavor.background,
+      styleWater: () => this.currentStyle.flavor.water,
     }
   }
 
