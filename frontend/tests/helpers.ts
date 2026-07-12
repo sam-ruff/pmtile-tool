@@ -7,6 +7,9 @@ export interface MapProbe {
   drawVisible: boolean
   highlightCount: number
   drawnCount: number
+  styleId: string
+  styleBackground: string
+  styleWater: string
 }
 
 /// State probes installed by the map controller in mock/dev builds.
@@ -20,6 +23,9 @@ export async function mapState(page: Page): Promise<MapProbe> {
           drawLayerVisible: () => boolean
           highlightCount: () => number
           drawnCount: () => number
+          styleId: () => string
+          styleBackground: () => string
+          styleWater: () => string
         }
       }
     ).__pmtilesTest
@@ -29,6 +35,9 @@ export async function mapState(page: Page): Promise<MapProbe> {
       drawVisible: hooks.drawLayerVisible(),
       highlightCount: hooks.highlightCount(),
       drawnCount: hooks.drawnCount(),
+      styleId: hooks.styleId(),
+      styleBackground: hooks.styleBackground(),
+      styleWater: hooks.styleWater(),
     }
   })
 }

@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { mapController } from './map/controller'
 import { useJobsStore } from './stores/jobs'
 import { useRegionsStore } from './stores/regions'
+import { useStylesStore } from './stores/styles'
 import RegionsPanel from './components/RegionsPanel.vue'
 import RegionDetailCard from './components/RegionDetailCard.vue'
 import ExportPanel from './components/ExportPanel.vue'
 import JobsPanel from './components/JobsPanel.vue'
+import StylePicker from './components/StylePicker.vue'
 
 type Tab = 'regions' | 'export' | 'jobs'
 
@@ -17,6 +19,14 @@ const panelOpen = ref(true)
 
 const jobs = useJobsStore()
 const regions = useRegionsStore()
+const styles = useStylesStore()
+
+// The controller stays Pinia-free; the store drives it from here.
+watch(
+  () => styles.selected,
+  (style) => mapController.setMapStyle(style),
+  { immediate: true },
+)
 
 const jobsBadge = computed(() => jobs.activeCount)
 
@@ -60,6 +70,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="app" :style="{ '--card-bottom': cardBottom }">
     <div ref="mapEl" class="map" />
+
+    <StylePicker />
 
     <RegionDetailCard />
 

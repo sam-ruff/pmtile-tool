@@ -3,9 +3,12 @@ import { computed, ref } from 'vue'
 import type { JobView } from '../api'
 import { formatBytes, formatCount, formatExpiry } from '../format'
 import { mapController } from '../map/controller'
+import { downloadStyleForJob } from '../map/styleExport'
 import { useJobsStore } from '../stores/jobs'
+import { useStylesStore } from '../stores/styles'
 
 const jobs = useJobsStore()
+const styles = useStylesStore()
 
 const previewUrl = computed(() => mapController.previewUrl.value)
 const confirmingDelete = ref<string | null>(null)
@@ -76,6 +79,14 @@ async function requestDelete(job: JobView) {
           >
             {{ isPreviewing(job) ? 'Hide preview' : 'Preview on map' }}
           </button>
+          <button
+            class="btn"
+            :title="`MapLibre style.json using the ${styles.selected.name} style`"
+            data-testid="download-style"
+            @click="downloadStyleForJob(job, styles.selected)"
+          >
+            Download style
+          </button>
         </template>
         <button
           class="btn-danger-ghost delete"
@@ -128,6 +139,7 @@ async function requestDelete(job: JobView) {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .download-link {
