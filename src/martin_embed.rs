@@ -25,9 +25,12 @@ pub fn build_martin_config(app: &AppConfig) -> MartinConfig {
 }
 
 /// Start the embedded martin server. The returned future is !Send and must be
-/// awaited on the task that created it (we select! on it in main).
+/// awaited on the task that created it (we select! on it in main). The
+/// planet archive is never replaced while running, so martin's cache
+/// invalidator is not needed.
 pub async fn start_martin(app: &AppConfig) -> MartinResult<(ServerFuture, String)> {
-    martin_embedded::start(build_martin_config(app)).await
+    let (server, addr, _invalidator) = martin_embedded::start(build_martin_config(app)).await?;
+    Ok((server, addr))
 }
 
 #[derive(Debug, thiserror::Error)]
