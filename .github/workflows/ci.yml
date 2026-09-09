@@ -146,9 +146,11 @@ jobs:
   docker:
     needs: release
     if: needs.release.outputs.version != ''
-    runs-on: ubuntu-latest
+    # The lab runner pool: it can reach the private registry, which GitHub-hosted runners cannot.
+    runs-on: self-hosted
     env:
-      IMAGE: samruff/pmtile-tool
+      REGISTRY: registry.tail2d6fbe.ts.net
+      IMAGE: registry.tail2d6fbe.ts.net/pmtile-tool/pmtile-tool
       VERSION: ${{ needs.release.outputs.version }}
 
     steps:
@@ -161,11 +163,12 @@ jobs:
       - name: Set version in Cargo.toml
         run: sed -i 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
 
-      - name: Log in to Docker Hub
+      - name: Log in to the registry
         uses: docker/login-action@v3
         with:
-          username: samruff
-          password: ${{ secrets.DOCKER_LOGIN_PASSWORD }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
 
       - name: Build and push image
         run: |
