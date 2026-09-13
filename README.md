@@ -8,6 +8,9 @@ The backend is a single Rust binary: an axum app serving the API and the embedde
 
 ## Development
 
+Rust is pinned in `rust-toolchain.toml` and Node in `.nvmrc`. Use the pnpm version
+declared in `package.json` and install with `pnpm install --frozen-lockfile`.
+
 The full planet archive is never downloaded on a dev machine. Fetch a small worldwide extract instead:
 
 ```sh
@@ -38,5 +41,12 @@ cd frontend && pnpm test && pnpm typecheck
 ```
 
 ## Data
+
+CI tests the API, real extraction pipeline and desktop/mobile mock frontend before
+releasing. The lab runner builds the release tag into a non-root Chainguard image
+and pushes it to `registry.tail2d6fbe.ts.net/pmtile-tool/pmtile-tool`. Image labels
+record the exact source commit and version. Source releases do not deploy a website.
+Staging is managed by the infrastructure repository; production handover from the
+legacy samruff deployer is still in progress.
 
 Basemap data comes from Protomaps daily builds of OpenStreetMap, © OpenStreetMap contributors, ODbL. Region boundaries come from the Geofabrik index. On the server the planet archive is provisioned by an Ansible playbook that checks disk space, downloads the latest build with resume support, and verifies its BLAKE3 hash.
