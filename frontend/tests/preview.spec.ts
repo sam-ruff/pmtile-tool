@@ -1,7 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './archive-fixture'
 import { createExportViaDraw, mapState } from './helpers'
 
-test('preview shows only the previewed archive and hides other selections', async ({ page }) => {
+test('preview shows only the previewed archive and hides other selections', async ({ page, archiveReads }) => {
+  const pageErrors: Error[] = []
+  page.on('pageerror', (error) => pageErrors.push(error))
   await page.goto('/')
 
   // Select a region: highlight appears and the floating card shows.
@@ -40,6 +42,8 @@ test('preview shows only the previewed archive and hides other selections', asyn
   expect(previewing.highlightVisible).toBe(false)
   expect(previewing.drawVisible).toBe(false)
   await expect(page.getByRole('button', { name: 'Hide preview' })).toBeVisible()
+  await expect.poll(() => archiveReads.some((read) => read.tileData)).toBe(true)
+  expect(pageErrors).toEqual([])
   await page.screenshot({ path: 'test-results/preview-active.png' })
 
   // Turning it off restores the hidden selections.
