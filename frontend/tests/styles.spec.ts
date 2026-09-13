@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { expect, test } from './archive-fixture'
 import { createExportViaDraw, mapState } from './helpers'
 
 // The mock build has no basemap layer (no /tiles backend), so assertions rely
@@ -57,7 +57,7 @@ test('custom styles can be created, edited and deleted', async ({ page }) => {
   expect((await mapState(page)).styleId).toBe('black')
 })
 
-test('switching styles while previewing keeps the preview alive', async ({ page }) => {
+test('switching styles while previewing keeps the preview alive', async ({ page, archiveReads }) => {
   const pageErrors: Error[] = []
   page.on('pageerror', (error) => pageErrors.push(error))
 
@@ -77,10 +77,8 @@ test('switching styles while previewing keeps the preview alive', async ({ page 
   const after = await mapState(page)
   expect(after.styleId).toBe('grayscale')
   expect(after.previewUrl).toBe(before.previewUrl)
-  // The mock download URL has no backend, so the PMTiles fetch itself fails
-  // with a 502; anything else (sprite loads, style application) must be clean.
-  const unexpected = pageErrors.filter((e) => !/Bad response code/.test(e.message))
-  expect(unexpected).toEqual([])
+  await expect.poll(() => archiveReads.some((read) => read.tileData)).toBe(true)
+  expect(pageErrors).toEqual([])
 })
 
 test('download style produces a paired MapLibre style.json', async ({ page }) => {
