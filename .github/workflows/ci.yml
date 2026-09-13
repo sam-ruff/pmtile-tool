@@ -1,6 +1,6 @@
 name: CI
 
-on:
+'on':
   push:
     branches:
       - main
@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       # Build the embedded UI so build.rs bakes it into the binary, matching
       # what ships.
@@ -47,6 +49,9 @@ jobs:
 
       - name: Build frontend into static
         run: ./scripts/sync-ui.sh
+
+      - name: Test release identity without credentials
+        run: pnpm install --frozen-lockfile && pnpm test:release
 
       - name: Install Rust toolchain
         run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt
@@ -93,6 +98,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
@@ -128,8 +135,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
     outputs:
       version: ${{ steps.ver.outputs.version }}
 
@@ -173,12 +178,13 @@ jobs:
       REGISTRY: registry.tail2d6fbe.ts.net
       IMAGE: registry.tail2d6fbe.ts.net/pmtile-tool/pmtile-tool
       VERSION: ${{ needs.release.outputs.version }}
+      GIT_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: v${{ needs.release.outputs.version }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Compute tags
@@ -194,8 +200,9 @@ jobs:
       - name: Build and push image
         run: |
           docker build \
-            --build-arg GIT_SHA="$(git rev-parse HEAD)" --build-arg VERSION="$VERSION" \
-            -t "$IMAGE:latest" -t "$IMAGE:$VERSION" -t "$IMAGE:$MAJOR_MINOR" .
+            --build-arg GIT_SHA="$GIT_SHA" --build-arg VERSION="$VERSION" \
+            -t "$IMAGE:latest" -t "$IMAGE:$VERSION" -t "$IMAGE:$MAJOR_MINOR" -t "$IMAGE:sha-$GIT_SHA" .
           docker push "$IMAGE:latest"
           docker push "$IMAGE:$VERSION"
           docker push "$IMAGE:$MAJOR_MINOR"
+          docker push "$IMAGE:sha-$GIT_SHA"

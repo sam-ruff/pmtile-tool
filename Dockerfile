@@ -24,9 +24,11 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations ./migrations
 COPY src ./src
 COPY --from=ui /app/frontend/dist ./static
+ARG VERSION
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
+    if [ -n "$VERSION" ]; then export PMTILES_RELEASE_VERSION="$VERSION"; fi; \
     cargo build --release --locked --target x86_64-unknown-linux-musl \
     && cp target/x86_64-unknown-linux-musl/release/pmtile-tool /tmp/pmtile-tool
 
