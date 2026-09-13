@@ -160,13 +160,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run semantic-release
+        id: publish_release
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm exec semantic-release
 
       - name: Capture released version
         id: ver
-        run: echo "version=${RELEASE_VERSION:-}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_OUTCOME: ${{ steps.publish_release.outcome }}
+        run: node scripts/verify-release.cjs
 
   docker:
     needs: release
