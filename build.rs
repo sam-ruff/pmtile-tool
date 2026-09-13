@@ -2,9 +2,27 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
+#[path = "src/release_version.rs"]
+mod release_version;
+
 /// Embeds everything under static/ (the built frontend) into the binary as a
 /// path -> bytes map, generated into OUT_DIR and included by src/rest/ui.rs.
 fn main() -> io::Result<()> {
+    println!("cargo:rerun-if-env-changed=PMTILES_RELEASE_VERSION");
+    let injected = match env::var("PMTILES_RELEASE_VERSION") {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid release version",
+            ));
+        }
+    };
+    let package = env::var("CARGO_PKG_VERSION").map_err(io::Error::other)?;
+    let version = release_version::resolve_release_version(injected.as_deref(), &package)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    println!("cargo:rustc-env=PMTILES_VERSION={version}");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
     let static_dir = manifest_dir.join("static");

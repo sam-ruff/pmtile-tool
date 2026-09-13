@@ -23,6 +23,6 @@ pub async fn status(State(ctx): State<AppContext>) -> Result<Json<StatusView>, A
         running: ctx.store.running_count().await?,
         disk_free_bytes: crate::disk::free_bytes(&ctx.config.data_dir).unwrap_or(0),
         region_cache_bytes: crate::disk::dir_size(&ctx.config.region_cache_dir()).unwrap_or(0),
-        version: env!("CARGO_PKG_VERSION"),
+        version: env!("PMTILES_VERSION"),
     }))
 }
