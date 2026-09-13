@@ -9,3 +9,5 @@ frontend/.vite
 bin/
 .env
 node_modules
+frontend/test-results/
+frontend/playwright-report/
