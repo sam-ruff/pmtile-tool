@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   backend-tests:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, sophie]
     timeout-minutes: 40
 
     steps:
@@ -90,7 +90,7 @@ jobs:
         run: cargo +1.96.0 test --locked --test e2e_extract -- --ignored
 
   frontend-tests:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, sophie]
     timeout-minutes: 20
     defaults:
       run:
@@ -131,7 +131,7 @@ jobs:
   release:
     needs: [backend-tests, frontend-tests]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, sophie]
     timeout-minutes: 15
     permissions:
       contents: write
