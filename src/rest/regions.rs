@@ -25,7 +25,7 @@ pub struct RegionDetail {
 
 /// List all regions as a flat tree (client rebuilds the hierarchy via parent).
 #[utoipa::path(get, path = "/api/v1/regions", tag = "regions",
-    responses((status = 200, body = [RegionSummary])))]
+    responses((status = 200, body = [RegionSummary], description = "All known regions")))]
 pub async fn list_regions(State(ctx): State<AppContext>) -> Json<Vec<RegionSummary>> {
     Json(ctx.regions.summaries())
 }
@@ -33,7 +33,7 @@ pub async fn list_regions(State(ctx): State<AppContext>) -> Json<Vec<RegionSumma
 /// One region with its extract status.
 #[utoipa::path(get, path = "/api/v1/regions/{id}", tag = "regions",
     params(("id" = String, Path, description = "Region id")),
-    responses((status = 200, body = RegionDetail), (status = 404, description = "Unknown region")))]
+    responses((status = 200, body = RegionDetail, description = "Region found"), (status = 404, description = "Unknown region")))]
 pub async fn region_detail(
     State(ctx): State<AppContext>,
     Path(id): Path<String>,

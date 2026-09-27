@@ -130,6 +130,61 @@ async fn health(State(ctx): State<AppContext>) -> Result<&'static str, ApiError>
 }
 
 #[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    use super::build_router;
+    use super::test_util::test_app;
+
+    async fn get(uri: &str) -> (StatusCode, String, Vec<u8>) {
+        let app = test_app().await;
+        let resp = build_router(app.ctx.clone())
+            .oneshot(Request::get(uri).body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let body = resp.into_body().collect().await.expect("body").to_bytes();
+        (status, content_type, body.to_vec())
+    }
+
+    #[tokio::test]
+    async fn swagger_ui_index_is_served() {
+        let (status, content_type, body) = get("/swagger-ui/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(content_type.starts_with("text/html"), "{content_type}");
+        assert!(String::from_utf8_lossy(&body).contains("swagger-ui"));
+    }
+
+    #[tokio::test]
+    async fn swagger_ui_assets_are_embedded() {
+        let (status, _, body) = get("/swagger-ui/swagger-ui-bundle.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn swagger_ui_serves_the_api_spec() {
+        let (status, content_type, body) = get("/swagger-ui/openapi.json").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            content_type.starts_with("application/json"),
+            "{content_type}"
+        );
+        let spec: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(spec["info"]["title"], "pmtile-tool API");
+    }
+}
+
+#[cfg(test)]
 pub mod test_util {
     use std::sync::Arc;
 

@@ -41,7 +41,7 @@ fn validated_estimate(ctx: &AppContext, body: &ExportRequestBody) -> Result<Esti
 /// Estimate the size of an export without creating a job.
 #[utoipa::path(post, path = "/api/v1/exports/estimate", tag = "exports",
     request_body = ExportRequestBody,
-    responses((status = 200, body = Estimate), (status = 400, description = "Invalid geometry")))]
+    responses((status = 200, body = Estimate, description = "Estimated extract size"), (status = 400, description = "Invalid geometry")))]
 pub async fn estimate_export(
     State(ctx): State<AppContext>,
     Json(body): Json<ExportRequestBody>,
@@ -53,7 +53,7 @@ pub async fn estimate_export(
 #[utoipa::path(post, path = "/api/v1/exports", tag = "exports",
     request_body = ExportRequestBody,
     responses(
-        (status = 202, body = JobView),
+        (status = 202, body = JobView, description = "Export job enqueued"),
         (status = 400, description = "Invalid geometry or maxzoom"),
         (status = 422, description = "Export too large"),
         (status = 429, description = "Per-client quota exceeded"),
@@ -155,7 +155,7 @@ pub async fn create_export(
 /// Fetch one export job.
 #[utoipa::path(get, path = "/api/v1/exports/{id}", tag = "exports",
     params(("id" = String, Path, description = "Job id")),
-    responses((status = 200, body = JobView), (status = 404, description = "Unknown job")))]
+    responses((status = 200, body = JobView, description = "Job found"), (status = 404, description = "Unknown job")))]
 pub async fn get_export(
     State(ctx): State<AppContext>,
     Path(id): Path<String>,
