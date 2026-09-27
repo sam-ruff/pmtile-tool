@@ -16,7 +16,7 @@ pub struct StatusView {
 
 /// Service status: queue depth and disk headroom.
 #[utoipa::path(get, path = "/api/v1/status", tag = "status",
-    responses((status = 200, body = StatusView)))]
+    responses((status = 200, body = StatusView, description = "Current service status")))]
 pub async fn status(State(ctx): State<AppContext>) -> Result<Json<StatusView>, ApiError> {
     Ok(Json(StatusView {
         queued: ctx.store.queued_count().await?,
