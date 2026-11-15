@@ -1,14 +1,14 @@
-FROM node:24.17.0-alpine@sha256:156b55f92e98ccd5ef49578a8cea0df4679826564bad1c9d4ef04462b9f0ded6 AS ui
+FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS ui
 WORKDIR /app/frontend
-RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+RUN corepack enable && corepack prepare pnpm@10.34.9 --activate
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm run build
 
-FROM rust:1.96-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 AS builder
-ARG GO_PMTILES_VERSION=1.30.3
-ARG GO_PMTILES_SHA256=adda9f979b719416d0c0069f57401a21c32078c46870a94f9bbda95d850f199f
+FROM rust:1.100-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS builder
+ARG GO_PMTILES_VERSION=1.31.2
+ARG GO_PMTILES_SHA256=3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates musl-tools pkg-config cmake clang \
     && rm -rf /var/lib/apt/lists/*
@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --target x86_64-unknown-linux-musl \
     && cp target/x86_64-unknown-linux-musl/release/pmtile-tool /tmp/pmtile-tool
 
-FROM cgr.dev/chainguard/static@sha256:77d8b8925dc27970ec2f48243f44c7a260d52c49cd778288e4ee97566e0cb75b
+FROM cgr.dev/chainguard/static@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9
 ARG GIT_SHA
 ARG VERSION
 LABEL org.opencontainers.image.source="https://github.com/sam-ruff/pmtile-tool" \

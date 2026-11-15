@@ -3,7 +3,7 @@ use std::path::Path;
 
 /// Free bytes on the filesystem holding `path`.
 pub fn free_bytes(path: &Path) -> io::Result<u64> {
-    let stat = nix::sys::statvfs::statvfs(path).map_err(io::Error::other)?;
+    let stat = nix::sys::statvfs::statvfs(path).map_err(io::Error::from)?;
     Ok(stat.block_size() * stat.blocks_available())
 }
 
@@ -31,6 +31,13 @@ mod tests {
     fn free_bytes_is_nonzero_for_tmp() {
         let free = free_bytes(Path::new("/tmp")).expect("statvfs");
         assert!(free > 0);
+    }
+
+    #[test]
+    fn free_bytes_reports_missing_path_as_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = free_bytes(&dir.path().join("missing")).expect_err("statvfs on missing path");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

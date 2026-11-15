@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-GO_PMTILES_VERSION="1.30.3"
+GO_PMTILES_VERSION="1.31.2"
 BIN="bin/pmtiles"
 OUT="data/planet.pmtiles"
 
