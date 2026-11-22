@@ -32,12 +32,15 @@ pub struct Limits {
     /// Hard ceiling on a single custom export's estimated size.
     pub max_custom_export_gb: u64,
     pub max_polygon_vertices: usize,
+    /// Most catalogue regions one custom export may combine.
+    pub max_export_regions: usize,
     pub jobs_per_ip_per_hour: u32,
     pub active_jobs_per_ip: u32,
     pub queue_depth_max: u32,
     pub max_concurrent_extracts: usize,
     pub extract_timeout_minutes: u64,
-    /// Average bytes per tile used for size estimates (derived from planet build).
+    /// Average bytes per tile for the rough size estimate, used only when a
+    /// go-pmtiles dry run of the planet cannot measure the real size.
     pub avg_tile_bytes: u64,
     /// Aggressive limiter on job-creating endpoints.
     pub job_rate_limit_per_second: u64,
@@ -94,6 +97,7 @@ impl Default for Limits {
             max_estimated_tiles: 150_000_000,
             max_custom_export_gb: 10,
             max_polygon_vertices: 1000,
+            max_export_regions: 20,
             jobs_per_ip_per_hour: 5,
             active_jobs_per_ip: 2,
             queue_depth_max: 20,

@@ -20,6 +20,15 @@ export function formatCount(count: number): string {
   return String(count)
 }
 
+export function formatElapsed(iso: string, now: number = Date.now()): string {
+  const elapsed = now - new Date(iso).getTime()
+  const minutes = Math.floor(elapsed / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} h ago`
+}
+
 export function formatExpiry(iso: string | undefined): string {
   if (!iso) return 'kept indefinitely'
   const remaining = new Date(iso).getTime() - Date.now()

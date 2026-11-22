@@ -14,6 +14,15 @@ const viewports = [
 const browser = await chromium.launch()
 let failures = 0
 
+async function check(label, fn) {
+  try {
+    await fn()
+    return [label, true]
+  } catch {
+    return [label, false]
+  }
+}
+
 for (const viewport of viewports) {
   const page = await browser.newPage({ viewport })
   const errors = []
@@ -27,21 +36,30 @@ for (const viewport of viewports) {
   const checks = [
     ['title', (await page.title()) === 'PMTiles Extract Tool'],
     ['map canvas rendered', (await page.locator('.map canvas').count()) > 0],
-    ['regions tree shows Europe', await page.getByText('Europe', { exact: true }).first().isVisible()],
+    await check('drawing tools on the map', () =>
+      page.getByTestId('tool-freehand').waitFor({ timeout: 15_000 }),
+    ),
+    await check('region tree shows Europe', () =>
+      page.getByTestId('region-europe').waitFor({ timeout: 15_000 }),
+    ),
   ]
+  await page.screenshot({ path: `${outDir}/ui-${viewport.name}-start.png` })
 
-  await page.getByRole('button', { name: 'Custom export' }).click()
-  checks.push(['export tab shows draw controls', await page.getByRole('button', { name: 'Draw polygon' }).isVisible()])
-  await page.screenshot({ path: `${outDir}/ui-${viewport.name}-export.png` })
+  checks.push(
+    await check('region card appears', async () => {
+      await page.getByTestId('region-europe').click()
+      await page.getByTestId('region-card').waitFor({ timeout: 15_000 })
+      await page.waitForLoadState('networkidle')
+    }),
+  )
+  await page.screenshot({ path: `${outDir}/ui-${viewport.name}-region.png` })
 
-  await page.getByRole('button', { name: /Jobs/ }).click()
-  checks.push(['jobs tab renders', await page.getByText(/export jobs/i).first().isVisible()])
-
-  await page.getByRole('button', { name: 'Regions' }).click()
-  await page.getByText('Europe', { exact: true }).first().click()
-  await page.waitForTimeout(1200)
-  await page.screenshot({ path: `${outDir}/ui-${viewport.name}-regions.png` })
-  checks.push(['region detail appears', await page.getByRole('button', { name: 'Generate extract' }).isVisible().catch(() => false)])
+  checks.push(
+    await check('downloads open', async () => {
+      await page.getByTestId('open-downloads').first().click()
+      await page.getByTestId('downloads').waitFor({ timeout: 15_000 })
+    }),
+  )
 
   for (const [name, ok] of checks) {
     console.log(`${viewport.name}: ${ok ? 'PASS' : 'FAIL'} - ${name}`)

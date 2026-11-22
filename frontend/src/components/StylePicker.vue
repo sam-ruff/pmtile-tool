@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Layers, Pencil, Plus, Trash2 } from '@lucide/vue'
 import { namedFlavor } from '@protomaps/basemaps'
 import type { Flavor } from '@protomaps/basemaps'
 import { isFlavourName, resolveFlavour, toHexColour } from '../map/flavours'
 import type { CustomMapStyle } from '../map/flavours'
 import { useStylesStore } from '../stores/styles'
 import StyleEditor from './StyleEditor.vue'
+
+defineProps<{ compact: boolean }>()
 
 const styles = useStylesStore()
 
@@ -38,11 +41,13 @@ function selectStyle(id: string) {
 function newCustom() {
   editing.value = null
   editorOpen.value = true
+  open.value = false
 }
 
 function editCustom(id: string) {
   editing.value = styles.customs.find((c) => c.id === id) ?? null
   editorOpen.value = editing.value !== null
+  open.value = false
 }
 
 // First click arms, second click within a few seconds confirms.
@@ -60,24 +65,27 @@ function requestDelete(id: string) {
 }
 
 function onDocumentClick(event: MouseEvent) {
-  if (!open.value || editorOpen.value) return
-  if (rootEl.value && !rootEl.value.contains(event.target as Node)) {
-    open.value = false
-  }
+  if (!open.value || editorOpen.value || !rootEl.value) return
+  // composedPath survives the clicked node being re-rendered away (the delete
+  // button swaps its icon for "Confirm?" before this listener runs).
+  if (!event.composedPath().includes(rootEl.value)) open.value = false
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && !editorOpen.value) open.value = false
+  if (event.key === 'Escape' && open.value && !editorOpen.value) {
+    open.value = false
+    event.stopPropagation()
+  }
 }
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
-  document.addEventListener('keydown', onKeydown)
+  document.addEventListener('keydown', onKeydown, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick)
-  document.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('keydown', onKeydown, true)
   if (confirmTimer !== null) window.clearTimeout(confirmTimer)
 })
 </script>
@@ -86,28 +94,25 @@ onBeforeUnmount(() => {
   <div ref="rootEl" class="style-picker">
     <button
       class="picker-button"
+      :class="{ compact }"
       data-testid="style-picker-button"
-      aria-label="Map style"
+      :aria-label="`Map style: ${selectedName}`"
       :aria-expanded="open"
+      :data-tip="compact ? undefined : 'Map style'"
       @click="open = !open"
     >
-      <span class="swatch-strip" aria-hidden="true">
-        <span
-          v-for="(colour, i) in swatches(styles.selectedId)"
-          :key="i"
-          :style="{ background: colour }"
-        />
-      </span>
-      <span class="picker-label">{{ selectedName }}</span>
+      <Layers :size="18" :stroke-width="1.9" />
+      <span v-if="!compact" class="picker-label">{{ selectedName }}</span>
     </button>
 
-    <div v-if="open" class="picker-popover" data-testid="style-popover">
-      <p class="popover-title">Map style</p>
+    <div v-if="open" class="picker-popover surface" data-testid="style-popover">
+      <p class="eyebrow">Map style</p>
       <ul class="option-list">
         <li v-for="option in styles.options" :key="option.id">
           <div class="option-row" :class="{ selected: styles.selectedId === option.id }">
             <button
               class="option-select"
+              :aria-pressed="styles.selectedId === option.id"
               :data-testid="`style-option-${option.id}`"
               @click="selectStyle(option.id)"
             >
@@ -122,58 +127,64 @@ onBeforeUnmount(() => {
             </button>
             <template v-if="option.custom">
               <button
-                class="btn-ghost option-action"
+                class="icon-btn sm"
+                :aria-label="`Edit ${option.name}`"
                 :data-testid="`style-edit-${option.id}`"
                 @click="editCustom(option.id)"
               >
-                Edit
+                <Pencil :size="15" />
               </button>
               <button
-                class="btn-danger-ghost option-action"
-                :class="{ arming: confirmingDelete === option.id }"
+                class="btn btn-danger option-delete"
+                :class="{ armed: confirmingDelete === option.id }"
+                :aria-label="confirmingDelete === option.id ? `Confirm delete ${option.name}` : `Delete ${option.name}`"
                 :data-testid="`style-delete-${option.id}`"
                 @click="requestDelete(option.id)"
               >
-                {{ confirmingDelete === option.id ? 'Confirm?' : 'Delete' }}
+                <template v-if="confirmingDelete === option.id">Confirm?</template>
+                <Trash2 v-else :size="15" />
               </button>
             </template>
           </div>
         </li>
       </ul>
-      <button class="btn new-custom" data-testid="style-new" @click="newCustom">
-        New custom style
+      <button class="btn btn-secondary btn-block" data-testid="style-new" @click="newCustom">
+        <Plus :size="16" /> New custom style
       </button>
     </div>
 
-    <StyleEditor
-      v-if="editorOpen"
-      :editing="editing"
-      @close="editorOpen = false"
-    />
+    <StyleEditor v-if="editorOpen" :editing="editing" @close="editorOpen = false" />
   </div>
 </template>
 
 <style scoped>
 .style-picker {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 15;
+  position: relative;
 }
 
 .picker-button {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--surface);
+  height: 38px;
+  padding: 0 12px 0 10px;
+  border-radius: var(--radius);
   color: var(--text);
-  box-shadow: var(--shadow);
-  font-weight: 500;
+  font-weight: 600;
+  font-size: var(--text-sm);
 }
 
-.picker-button:hover {
-  background: var(--surface-alt);
+.picker-button.compact {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  justify-content: center;
+}
+
+.picker-button:hover,
+.picker-button[aria-expanded='true'] {
+  background: var(--surface-2);
 }
 
 .swatch-strip {
@@ -186,29 +197,21 @@ onBeforeUnmount(() => {
 
 .swatch-strip span {
   width: 10px;
-  height: 16px;
+  height: 18px;
 }
 
 .picker-popover {
   position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 264px;
+  top: calc(100% + 10px);
+  right: -5px;
+  width: 272px;
   max-height: 60dvh;
   overflow-y: auto;
   padding: 12px;
-  background: var(--surface);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-}
-
-.popover-title {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 30;
 }
 
 .option-list {
@@ -223,28 +226,33 @@ onBeforeUnmount(() => {
 .option-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   border-radius: var(--radius);
 }
 
 .option-row.selected {
-  background: var(--primary-light);
+  background: var(--primary-soft);
 }
 
 .option-select {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  background: transparent;
-  color: var(--text);
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
   text-align: left;
   min-width: 0;
 }
 
 .option-row:not(.selected) .option-select:hover {
-  background: var(--surface-alt);
+  background: var(--surface-2);
+}
+
+.option-row.selected .option-name {
+  font-weight: 600;
+  color: var(--primary-text);
 }
 
 .option-name {
@@ -253,34 +261,19 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.option-action {
-  flex: none;
+.option-delete {
+  min-height: 30px;
   padding: 4px 8px;
-  font-size: 12px;
-}
-
-.option-action.arming {
-  background: #fef2f2;
-  font-weight: 600;
-}
-
-.new-custom {
-  width: 100%;
-  margin-top: 8px;
+  font-size: var(--text-xs);
 }
 
 @media (max-width: 720px) {
-  /* The zoom control owns the top-right corner on mobile. */
-  .style-picker {
-    top: 8px;
-    right: auto;
-    left: 8px;
-  }
-
   .picker-popover {
-    right: auto;
-    left: 0;
-    width: min(280px, calc(100vw - 16px));
+    position: fixed;
+    top: 60px;
+    left: 8px;
+    right: 8px;
+    width: auto;
   }
 }
 </style>

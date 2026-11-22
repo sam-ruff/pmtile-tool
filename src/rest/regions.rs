@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::views::JobView;
 use crate::error::ApiError;
-use crate::extract::estimate::{Estimate, estimate};
+use crate::extract::estimate::Estimate;
 use crate::extract::validate::to_multipolygon;
 use crate::jobs::{Job, JobKind, JobStatus};
 use crate::regions::RegionSummary;
@@ -111,13 +111,18 @@ pub async fn region_extract(
 
     // A region whose extract could never fit the whole budget is refused
     // outright so it cannot blow past the disk boundary.
-    let est = to_multipolygon(&region.geometry)
-        .map(|m| estimate(&m, maxzoom, limits.avg_tile_bytes))
-        .unwrap_or(Estimate { tiles: 0, bytes: 0 });
+    let est = match to_multipolygon(&region.geometry) {
+        Some(area) => ctx.sizes.estimate(&area, maxzoom, limits).await,
+        None => Estimate {
+            tiles: 0,
+            bytes: 0,
+            measured: false,
+        },
+    };
     if est.bytes > limits.data_budget_bytes() {
-        return Err(ApiError::TooLarge {
-            estimated_tiles: est.tiles,
-            max_tiles: limits.data_budget_bytes() / limits.avg_tile_bytes.max(1),
+        return Err(ApiError::TooManyBytes {
+            estimated_bytes: est.bytes,
+            max_bytes: limits.data_budget_bytes(),
         });
     }
 
@@ -134,11 +139,7 @@ pub async fn region_extract(
 
     // Evict least-recently-used outputs to keep the shared budget, counting
     // in-flight reservations so concurrent work cannot over-commit it.
-    let reserved = ctx
-        .store
-        .reserved_tiles()
-        .await?
-        .saturating_mul(limits.avg_tile_bytes);
+    let reserved = ctx.store.reserved_bytes().await?;
     let outcome = crate::jobs::cleanup::evict_to_fit(
         ctx.store.as_ref(),
         &ctx.config.exports_dir(),
@@ -156,7 +157,7 @@ pub async fn region_extract(
 
     let geometry =
         serde_json::to_string(&region.geometry).map_err(|e| ApiError::Internal(e.to_string()))?;
-    let job = Job::new_region(id, geometry, maxzoom, est.tiles, false);
+    let job = Job::new_region(id, geometry, maxzoom, est, false);
     let view = JobView::from_job(&job);
     ctx.engine.enqueue(job).await?;
     Ok((StatusCode::ACCEPTED, Json(view)))

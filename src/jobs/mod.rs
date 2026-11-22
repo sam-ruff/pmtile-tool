@@ -6,6 +6,18 @@ pub mod store;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::extract::estimate::Estimate;
+
+/// A rough estimate for tests that only care about the tile count.
+#[cfg(test)]
+pub(crate) fn test_estimate(tiles: u64) -> Estimate {
+    Estimate {
+        tiles,
+        bytes: tiles * 100,
+        measured: false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
@@ -59,6 +71,8 @@ pub struct Job {
     pub geometry: String,
     pub maxzoom: u8,
     pub estimated_tiles: u64,
+    /// Expected output size, reserved against the disk budget while in flight.
+    pub estimated_bytes: u64,
     pub file_path: Option<String>,
     pub file_size: Option<u64>,
     pub error: Option<String>,
@@ -76,7 +90,7 @@ impl Job {
         name: String,
         geometry: String,
         maxzoom: u8,
-        estimated_tiles: u64,
+        estimate: Estimate,
         client_ip: String,
     ) -> Self {
         Self {
@@ -88,7 +102,8 @@ impl Job {
             region_id: None,
             geometry,
             maxzoom,
-            estimated_tiles,
+            estimated_tiles: estimate.tiles,
+            estimated_bytes: estimate.bytes,
             file_path: None,
             file_size: None,
             error: None,
@@ -106,7 +121,7 @@ impl Job {
         region_id: String,
         geometry: String,
         maxzoom: u8,
-        estimated_tiles: u64,
+        estimate: Estimate,
         pinned: bool,
     ) -> Self {
         Self {
@@ -118,7 +133,8 @@ impl Job {
             region_id: Some(region_id),
             geometry,
             maxzoom,
-            estimated_tiles,
+            estimated_tiles: estimate.tiles,
+            estimated_bytes: estimate.bytes,
             file_path: None,
             file_size: None,
             error: None,
@@ -235,7 +251,13 @@ mod name_tests {
 
     #[test]
     fn filenames_are_sanitised() {
-        let mut job = Job::new_custom("My London Extract".into(), "{}".into(), 10, 1, "ip".into());
+        let mut job = Job::new_custom(
+            "My London Extract".into(),
+            "{}".into(),
+            10,
+            test_estimate(1),
+            "ip".into(),
+        );
         assert_eq!(filename_for(&job), "My-London-Extract.pmtiles");
         job.name = None;
         assert!(filename_for(&job).ends_with(".pmtiles"));

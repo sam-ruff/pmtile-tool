@@ -12,7 +12,6 @@ interface RegionsState {
   detail: RegionDetail | null
   detailError: string | null
   geometries: Map<string, GeoJSONGeometry>
-  extractPending: boolean
 }
 
 export const useRegionsStore = defineStore('regions', {
@@ -26,7 +25,6 @@ export const useRegionsStore = defineStore('regions', {
     detail: null,
     detailError: null,
     geometries: new Map(),
-    extractPending: false,
   }),
 
   getters: {
@@ -35,6 +33,23 @@ export const useRegionsStore = defineStore('regions', {
     },
     childrenOf(state): (id: string) => RegionSummary[] {
       return (id) => state.summaries.filter((r) => r.parent === id)
+    },
+    /// Readable ancestry, e.g. "Europe / United Kingdom".
+    pathOf(state): (id: string) => string {
+      return (id) => {
+        const names: string[] = []
+        let parent = state.summaries.find((r) => r.id === id)?.parent
+        while (parent) {
+          const region = state.summaries.find((r) => r.id === parent)
+          if (!region) break
+          names.unshift(region.name)
+          parent = region.parent
+        }
+        return names.join(' / ')
+      }
+    },
+    nameOf(state): (id: string) => string {
+      return (id) => state.summaries.find((r) => r.id === id)?.name ?? id
     },
     /// Case-insensitive name/id search across the whole hierarchy.
     searchResults(state): RegionSummary[] {
@@ -101,19 +116,16 @@ export const useRegionsStore = defineStore('regions', {
       }
     },
 
-    async requestExtract() {
-      if (!this.selectedId || this.extractPending) return
-      this.extractPending = true
-      try {
-        const job = await api().requestRegionExtract(this.selectedId)
-        if (this.detail && this.detail.id === this.selectedId) {
-          this.detail = { ...this.detail, extract: job }
-        }
-      } catch (e) {
-        this.detailError = e instanceof Error ? e.message : 'failed to request extract'
-      } finally {
-        this.extractPending = false
+    /// Open every ancestor so a region found by search shows in the tree.
+    reveal(id: string) {
+      const next = new Set(this.expanded)
+      let parent = this.summaries.find((r) => r.id === id)?.parent
+      while (parent) {
+        next.add(parent)
+        const current: string = parent
+        parent = this.summaries.find((r) => r.id === current)?.parent
       }
+      this.expanded = next
     },
   },
 })

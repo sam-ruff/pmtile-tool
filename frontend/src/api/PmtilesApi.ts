@@ -1,5 +1,6 @@
 import type {
   Estimate,
+  ExportArea,
   GeoJSONGeometry,
   JobView,
   RegionDetail,
@@ -12,9 +13,10 @@ export interface PmtilesApi {
   regionDetail(id: string): Promise<RegionDetail>
   regionGeometry(id: string): Promise<GeoJSONGeometry>
   requestRegionExtract(id: string): Promise<JobView>
-  createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView>
-  estimateExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<Estimate>
+  createExport(area: ExportArea, maxzoom: number, name?: string): Promise<JobView>
+  estimateExport(area: ExportArea, maxzoom: number): Promise<Estimate>
   getExport(id: string): Promise<JobView>
+  exportGeometry(id: string): Promise<GeoJSONGeometry>
   deleteExport(id: string): Promise<void>
   status(): Promise<StatusView>
 }

@@ -1,110 +1,168 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Eye, X } from '@lucide/vue'
 import { mapController } from './map/controller'
 import { useJobsStore } from './stores/jobs'
+import type { DownloadEntry } from './stores/jobs'
 import { useRegionsStore } from './stores/regions'
+import { useSelectionStore } from './stores/selection'
+import { useServerStore } from './stores/server'
 import { useStylesStore } from './stores/styles'
-import RegionsPanel from './components/RegionsPanel.vue'
-import RegionDetailCard from './components/RegionDetailCard.vue'
-import ExportPanel from './components/ExportPanel.vue'
-import JobsPanel from './components/JobsPanel.vue'
-import StylePicker from './components/StylePicker.vue'
-
-type Tab = 'regions' | 'export' | 'jobs'
+import { useToastsStore } from './stores/toasts'
+import DownloadsDrawer from './components/DownloadsDrawer.vue'
+import MapToolbar from './components/MapToolbar.vue'
+import ToastHost from './components/ToastHost.vue'
+import WizardPanel from './components/WizardPanel.vue'
+import type { SheetSnap } from './components/WizardPanel.vue'
+import ZoomControls from './components/ZoomControls.vue'
 
 const mapEl = ref<HTMLElement | null>(null)
-const panelEl = ref<HTMLElement | null>(null)
-const tab = ref<Tab>('regions')
-const panelOpen = ref(true)
+const downloadsOpen = ref(false)
+const snap = ref<SheetSnap>('half')
+const compact = ref(false)
 
 const jobs = useJobsStore()
 const regions = useRegionsStore()
+const selection = useSelectionStore()
+const server = useServerStore()
 const styles = useStylesStore()
+const toasts = useToastsStore()
 
-// The controller stays Pinia-free; the store drives it from here.
+const previewing = computed(() => mapController.previewUrl.value !== null)
+const previewName = computed(() => {
+  const url = mapController.previewUrl.value
+  if (!url) return ''
+  return jobs.downloads.find((d) => d.job.download_url && url.endsWith(d.job.download_url))?.title ?? 'extract'
+})
+
+// The controller stays Pinia-free; the stores drive it from here.
 watch(
   () => styles.selected,
   (style) => mapController.setMapStyle(style),
   { immediate: true },
 )
 
-const jobsBadge = computed(() => jobs.activeCount)
+mapController.bind({
+  shapeAdded: (id, tool, geometry, areaKm2) => selection.addDrawn(id, tool, geometry, areaKm2),
+  shapeChanged: (id, geometry, areaKm2) => selection.updateDrawn(id, geometry, areaKm2),
+  shapeSelected: (id) => selection.select(id),
+  removeRequested: (id) => selection.remove(id),
+})
 
-// Floating map cards sit bottom-centre. On mobile the panel is a bottom sheet,
-// so lift them clear of its measured height; on desktop it is a side panel and
-// a small fixed offset is enough.
-const isMobile = ref(false)
-const sheetHeight = ref(0)
-const cardBottom = computed(() => (isMobile.value ? `${sheetHeight.value + 12}px` : '24px'))
+watch(
+  () => selection.drawn.map((d) => d.id),
+  (ids) => mapController.syncShapes(ids),
+)
+
+watch(
+  () =>
+    selection.regions
+      .filter((r) => r.geometry !== null)
+      .map((r) => ({ id: r.id, geometry: r.geometry! })),
+  (regionShapes) => mapController.setRegionShapes(regionShapes),
+)
+
+watch(
+  () => selection.selectedId,
+  (id) => {
+    if (id === mapController.selectedShapeId.value) return
+    mapController.selectShape(id && !id.startsWith('region:') ? id : null)
+  },
+)
+
+// Drawing on a phone needs the map, so tuck the sheet away while a tool is on.
+watch(
+  () => mapController.tool.value,
+  (tool) => {
+    if (compact.value && tool !== 'select') snap.value = 'peek'
+  },
+)
+
+function openDownloads() {
+  downloadsOpen.value = true
+}
+
+function onStatusChange(entry: DownloadEntry) {
+  if (entry.job.status === 'done') {
+    toasts.push('success', `${entry.title} is ready to download`, 'Open', openDownloads)
+  } else if (entry.job.status === 'failed') {
+    toasts.push('error', `${entry.title} failed: ${entry.job.error ?? 'unknown error'}`, 'Details', openDownloads)
+  }
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+  if (downloadsOpen.value || document.querySelector('[data-testid="style-editor"]')) return
+  if (isTyping(event.target)) return
+  if (event.key === 'Escape' && previewing.value) {
+    mapController.setPreview(null)
+    event.preventDefault()
+    return
+  }
+  if (mapController.handleKey(event.key)) event.preventDefault()
+}
 
 let mq: MediaQueryList | null = null
-let ro: ResizeObserver | null = null
-function updateMobile() {
-  isMobile.value = mq?.matches ?? false
+function updateCompact() {
+  compact.value = mq?.matches ?? false
 }
 
 onMounted(() => {
-  if (mapEl.value) {
-    mapController.init(mapEl.value)
-  }
+  if (mapEl.value) mapController.init(mapEl.value)
   mq = window.matchMedia('(max-width: 720px)')
-  updateMobile()
-  mq.addEventListener('change', updateMobile)
-  if (panelEl.value) {
-    ro = new ResizeObserver(() => {
-      sheetHeight.value = panelEl.value?.offsetHeight ?? 0
-    })
-    ro.observe(panelEl.value)
-  }
+  updateCompact()
+  mq.addEventListener('change', updateCompact)
+  document.addEventListener('keydown', onKeydown)
+  jobs.setStatusListener(onStatusChange)
   void regions.load()
   void jobs.load()
+  void server.load()
 })
 
 onBeforeUnmount(() => {
   mapController.destroy()
-  mq?.removeEventListener('change', updateMobile)
-  ro?.disconnect()
+  mq?.removeEventListener('change', updateCompact)
+  document.removeEventListener('keydown', onKeydown)
+  jobs.setStatusListener(null)
 })
 </script>
 
 <template>
-  <div class="app" :style="{ '--card-bottom': cardBottom }">
-    <div ref="mapEl" class="map" />
+  <div class="app" :class="{ compact }">
+    <div ref="mapEl" class="map" :class="`tool-${mapController.tool.value}`" />
 
-    <StylePicker />
-
-    <RegionDetailCard />
-
-    <aside ref="panelEl" class="panel" :class="{ closed: !panelOpen }">
-      <header class="panel-header">
-        <h1>PMTiles Extract Tool</h1>
-        <button
-          class="btn-ghost panel-toggle"
-          :aria-label="panelOpen ? 'Collapse panel' : 'Expand panel'"
-          @click="panelOpen = !panelOpen"
-        >
-          {{ panelOpen ? '×' : '≡' }}
+    <MapToolbar
+      :compact="compact"
+      :previewing="previewing"
+      :active-downloads="jobs.activeCount"
+      @open-downloads="openDownloads"
+    >
+      <div v-if="previewing" class="preview-banner surface" role="status" data-testid="preview-banner">
+        <Eye :size="18" class="preview-icon" />
+        <span>Previewing <strong>{{ previewName }}</strong>. Only its tiles are shown.</span>
+        <button class="btn btn-secondary" @click="mapController.setPreview(null)">
+          <X :size="16" /> Exit preview
         </button>
-      </header>
+      </div>
+    </MapToolbar>
 
-      <template v-if="panelOpen">
-        <nav class="tabs">
-          <button :class="{ active: tab === 'regions' }" @click="tab = 'regions'">Regions</button>
-          <button :class="{ active: tab === 'export' }" @click="tab = 'export'">
-            Custom export
-          </button>
-          <button :class="{ active: tab === 'jobs' }" @click="tab = 'jobs'">
-            Jobs<span v-if="jobsBadge > 0" class="tab-badge">{{ jobsBadge }}</span>
-          </button>
-        </nav>
+    <ZoomControls />
 
-        <div class="panel-body">
-          <RegionsPanel v-if="tab === 'regions'" />
-          <ExportPanel v-else-if="tab === 'export'" />
-          <JobsPanel v-else />
-        </div>
-      </template>
-    </aside>
+    <WizardPanel
+      v-model:snap="snap"
+      :compact="compact"
+      :active-downloads="jobs.activeCount"
+      @open-downloads="openDownloads"
+    />
+
+    <ToastHost />
+
+    <DownloadsDrawer v-if="downloadsOpen" @close="downloadsOpen = false" />
   </div>
 </template>
 
@@ -112,107 +170,37 @@ onBeforeUnmount(() => {
 .app {
   position: relative;
   height: 100%;
+  overflow: hidden;
 }
 
 .map {
   position: absolute;
   inset: 0;
-  background: #e8f0f0;
+  background: var(--bg);
 }
 
-.panel {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  bottom: 16px;
-  width: 360px;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  z-index: 20;
+.map:not(.tool-select) {
+  cursor: crosshair;
 }
 
-.panel.closed {
-  bottom: auto;
-}
-
-.panel-header {
+.preview-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  max-width: 100%;
+  padding: 8px 8px 8px 14px;
+  font-size: var(--text-sm);
+  pointer-events: auto;
+  border: 2px solid var(--preview);
 }
 
-.panel-header h1 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.preview-icon {
+  color: var(--preview);
+  flex: none;
 }
 
-.panel-toggle {
-  font-size: 16px;
-  line-height: 1;
-  padding: 4px 10px;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tabs button {
-  flex: 1;
-  padding: 8px 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-weight: 500;
-  border-radius: var(--radius);
-}
-
-.tabs button:hover {
-  background: var(--surface-alt);
-}
-
-.tabs button.active {
-  background: var(--primary-light);
-  color: var(--primary-dark);
-}
-
-.tab-badge {
-  margin-left: 6px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-@media (max-width: 720px) {
-  .panel {
-    top: auto;
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    width: auto;
-    max-height: 55dvh;
-  }
-
-  .panel.closed {
-    max-height: none;
-  }
+.compact .preview-banner {
+  width: 100%;
+  font-size: var(--text-xs);
 }
 </style>

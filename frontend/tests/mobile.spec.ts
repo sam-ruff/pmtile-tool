@@ -1,61 +1,79 @@
 import { expect, test } from '@playwright/test'
+import { mapState } from './helpers'
 
-test.use({ viewport: { width: 390, height: 844 } })
+test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
-test('mobile layout keeps the panel usable as a bottom sheet', async ({ page }) => {
+async function sheetHeight(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => document.querySelector('[data-map-inset]')?.getBoundingClientRect().height ?? 0)
+}
+
+/// Height once the sheet's snap transition has settled.
+async function settledHeight(page: import('@playwright/test').Page): Promise<number> {
+  let last = -1
+  await expect
+    .poll(async () => {
+      const now = await sheetHeight(page)
+      const stable = now === last
+      last = now
+      return stable
+    })
+    .toBe(true)
+  return last
+}
+
+test('the steps live in a bottom sheet that resizes from its handle', async ({ page }) => {
   await page.goto('/')
-
-  await expect(page.getByRole('heading', { name: 'PMTiles Extract Tool' })).toBeVisible()
   await expect(page.locator('.map canvas').first()).toBeVisible()
-
-  // All three tabs reachable.
-  await page.getByRole('button', { name: 'Custom export' }).click()
-  await expect(page.getByRole('button', { name: 'Draw rectangle' })).toBeVisible()
-  await page.getByRole('button', { name: /Jobs/ }).click()
-  await expect(page.getByText(/No export jobs yet/)).toBeVisible()
-  await page.getByRole('button', { name: 'Regions' }).click()
+  await expect(page.getByRole('navigation', { name: 'Steps' })).toBeVisible()
   await expect(page.getByLabel('Search regions')).toBeVisible()
 
-  // The panel collapses out of the way of the map.
-  await page.getByRole('button', { name: 'Collapse panel' }).click()
-  await expect(page.getByLabel('Search regions')).toBeHidden()
-  await page.screenshot({ path: 'test-results/mobile-collapsed.png' })
+  const half = await settledHeight(page)
   await page.getByRole('button', { name: 'Expand panel' }).click()
-  await expect(page.getByLabel('Search regions')).toBeVisible()
-  await page.screenshot({ path: 'test-results/mobile-regions.png' })
+  const full = await settledHeight(page)
+  expect(full).toBeGreaterThan(half)
+  await page.getByRole('button', { name: 'Shrink panel' }).click()
+  const peek = await settledHeight(page)
+  expect(peek).toBeLessThan(half)
+  await page.screenshot({ path: 'test-results/mobile-peek.png' })
 })
 
-test('the Generate extract button is reachable and clickable on mobile', async ({ page }) => {
+test('picking a drawing tool tucks the sheet away and drawing works', async ({ page }) => {
   await page.goto('/')
+  const before = await settledHeight(page)
+  await page.getByTestId('tool-rectangle').click()
+  const tucked = await settledHeight(page)
+  expect(tucked).toBeLessThan(before)
 
-  // Select a region from the bottom-sheet: its card floats above the sheet.
-  await page.getByLabel('Search regions').fill('Europe')
-  await page.getByText('Europe', { exact: true }).click()
+  await page.mouse.click(120, 260)
+  await page.mouse.move(240, 360)
+  await page.mouse.click(240, 360)
+  await expect.poll(async () => (await mapState(page)).drawnCount).toBe(1)
+  await expect(page.getByTestId('next-step')).toBeEnabled()
+  await page.screenshot({ path: 'test-results/mobile-drawn.png' })
+})
+
+test('the region card button is reachable and responds on a phone', async ({ page }) => {
+  await page.goto('/')
+  await page.getByLabel('Search regions').fill('Cornwall')
+  await page.getByRole('button', { name: /Cornwall/ }).first().click()
   const card = page.getByTestId('region-card')
   await expect(card).toBeVisible()
 
-  const button = page.getByRole('button', { name: 'Generate extract' })
-
-  // The card must sit clear of the bottom sheet and the button must be the
-  // topmost element at its centre (nothing overlays it).
-  const clear = await page.evaluate(() => {
-    const cardEl = document.querySelector('[data-testid="region-card"]') as HTMLElement
-    const panel = document.querySelector('.panel') as HTMLElement
-    const btn = Array.from(document.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Generate extract',
-    ) as HTMLElement
-    const b = btn.getBoundingClientRect()
-    const topEl = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
-    return {
-      aboveSheet: cardEl.getBoundingClientRect().bottom <= panel.getBoundingClientRect().top + 1,
-      buttonOnTop: topEl === btn || btn.contains(topEl),
-    }
+  const onTop = await page.evaluate(() => {
+    const button = document.querySelector('[data-testid="region-generate"]') as HTMLElement
+    const box = button.getBoundingClientRect()
+    const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return top === button || button.contains(top)
   })
-  expect(clear.aboveSheet).toBe(true)
-  expect(clear.buttonOnTop).toBe(true)
-  await page.screenshot({ path: 'test-results/mobile-region-card.png' })
+  expect(onTop).toBe(true)
+  await card.getByTestId('region-generate').click()
+  await expect(card.getByText(/Waiting in the queue|Being prepared now/)).toBeVisible()
+})
 
-  // And it genuinely responds to a tap.
-  await button.click()
-  await expect(page.getByText(/Generating extract|Queued/)).toBeVisible()
+test('downloads open as a sheet from the toolbar', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('open-downloads').click()
+  await expect(page.getByText('No downloads yet')).toBeVisible()
+  await page.getByRole('button', { name: 'Close downloads' }).click()
+  await expect(page.getByTestId('downloads')).toBeHidden()
 })

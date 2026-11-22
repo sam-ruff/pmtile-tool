@@ -1,5 +1,7 @@
+pub mod compose;
 pub mod estimate;
 mod go_pmtiles;
+pub mod sizer;
 pub mod validate;
 
 use std::path::PathBuf;

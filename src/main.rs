@@ -6,6 +6,7 @@ use std::time::Duration as StdDuration;
 use chrono::Duration;
 use pmtile_tool::config::AppConfig;
 use pmtile_tool::extract::GoPmtilesExtractor;
+use pmtile_tool::extract::sizer::GoPmtilesSizer;
 use pmtile_tool::jobs::cleanup::spawn_sweeper;
 use pmtile_tool::jobs::engine::JobEngine;
 use pmtile_tool::jobs::runner::RunnerPaths;
@@ -15,6 +16,9 @@ use pmtile_tool::regions::RegionCatalog;
 use pmtile_tool::rest::build_router;
 use pmtile_tool::state::AppContext;
 use tracing_subscriber::EnvFilter;
+
+/// A size measurement that takes longer falls back to the rough estimate.
+const MEASURE_TIMEOUT_SECS: u64 = 20;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
     tracing::info!("listening on {}", config.listen);
 
-    let ctx = AppContext::new(config, backend, regions, store, engine);
+    let sizer = Arc::new(GoPmtilesSizer::new(
+        config.go_pmtiles_bin.clone(),
+        config.planet_path(),
+        config.work_dir(),
+        StdDuration::from_secs(MEASURE_TIMEOUT_SECS),
+    ));
+    let ctx = AppContext::new(config, backend, regions, store, engine).with_sizer(sizer);
     let app = build_router(ctx);
 
     // The martin future is !Send, so both servers are awaited on this task.

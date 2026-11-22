@@ -4,13 +4,16 @@ use serde::Serialize;
 /// Web Mercator latitude cutoff; the planet basemap contains nothing beyond it.
 const MERC_MAX_LAT: f64 = 85.051_128_78;
 
-#[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Estimate {
     pub tiles: u64,
     pub bytes: u64,
+    /// True when measured from the planet archive rather than approximated
+    /// from the area's shape.
+    pub measured: bool,
 }
 
-/// Estimate how many tiles (and roughly how many bytes) an extract covers.
+/// Approximate how many tiles (and roughly how many bytes) an extract covers.
 ///
 /// Classic rasterisation bound per zoom level: a polygon covering fraction `a`
 /// of the projected world with boundary length `p` (world widths) touches at
@@ -26,6 +29,7 @@ pub fn estimate(multi: &MultiPolygon, maxzoom: u8, avg_tile_bytes: u64) -> Estim
     Estimate {
         tiles,
         bytes: tiles.saturating_mul(avg_tile_bytes),
+        measured: false,
     }
 }
 

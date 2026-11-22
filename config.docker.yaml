@@ -11,6 +11,7 @@ limits:
   max_estimated_tiles: 150000000
   max_custom_export_gb: 10
   max_polygon_vertices: 1000
+  max_export_regions: 20
   jobs_per_ip_per_hour: 5
   active_jobs_per_ip: 2
   queue_depth_max: 20

@@ -38,6 +38,17 @@ export interface RegionDetail {
 export interface Estimate {
   tiles: number
   bytes: number
+  /** Measured from the planet archive; false when only approximated from the area's shape. */
+  measured: boolean
+}
+
+export interface Limits {
+  max_maxzoom: number
+  max_export_bytes: number
+  max_estimated_tiles: number
+  max_polygon_vertices: number
+  max_export_regions: number
+  export_ttl_hours: number
 }
 
 export interface StatusView {
@@ -46,11 +57,18 @@ export interface StatusView {
   disk_free_bytes: number
   region_cache_bytes: number
   version: string
+  limits?: Limits
 }
 
-export interface GeoJSONGeometry {
-  type: 'Polygon' | 'MultiPolygon'
-  coordinates: number[][][] | number[][][][]
+export type GeoJSONGeometry =
+  | { type: 'Polygon'; coordinates: number[][][] }
+  | { type: 'MultiPolygon'; coordinates: number[][][][] }
+
+/// What an export is cut to: drawn shapes merged into one geometry plus any
+/// catalogue regions, unioned server-side into a single archive.
+export interface ExportArea {
+  geometry?: GeoJSONGeometry
+  regionIds: string[]
 }
 
 export class ApiRequestError extends Error {

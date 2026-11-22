@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, test } from './archive-fixture'
-import { createExportViaDraw, mapState } from './helpers'
+import { closeDownloads, createExportViaDraw, mapState, openDownloads } from './helpers'
 
 // The mock build has no basemap layer (no /tiles backend), so assertions rely
 // on the controller style probes plus the preview applyStyle path.
@@ -63,13 +63,13 @@ test('switching styles while previewing keeps the preview alive', async ({ page,
 
   await page.goto('/')
   await createExportViaDraw(page, 'styled preview')
-  await page.getByRole('button', { name: /Jobs/ }).click()
-  await expect(page.getByRole('button', { name: 'Preview on map' })).toBeVisible({
-    timeout: 10_000,
-  })
-  await page.getByRole('button', { name: 'Preview on map' }).click()
+  await openDownloads(page)
+  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Preview', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Hide', exact: true })).toBeVisible()
   const before = await mapState(page)
   expect(before.previewUrl).toContain('/download')
+  await closeDownloads(page)
 
   await page.getByTestId('style-picker-button').click()
   await page.getByTestId('style-option-grayscale').click()
@@ -84,12 +84,12 @@ test('switching styles while previewing keeps the preview alive', async ({ page,
 test('download style produces a paired MapLibre style.json', async ({ page }) => {
   await page.goto('/')
   await createExportViaDraw(page, 'style download test')
-  await page.getByRole('button', { name: /Jobs/ }).click()
-  await expect(page.getByTestId('download-style')).toBeVisible({ timeout: 10_000 })
-
   await page.getByTestId('style-picker-button').click()
   await page.getByTestId('style-option-dark').click()
+  await page.keyboard.press('Escape')
 
+  await openDownloads(page)
+  await expect(page.getByTestId('download-style')).toBeVisible({ timeout: 10_000 })
   const downloadPromise = page.waitForEvent('download')
   await page.getByTestId('download-style').click()
   const download = await downloadPromise
@@ -99,9 +99,22 @@ test('download style produces a paired MapLibre style.json', async ({ page }) =>
   const style = JSON.parse(await readFile(path, 'utf-8'))
   expect(style.version).toBe(8)
   expect(style.sources.protomaps.url).toMatch(/^pmtiles:\/\//)
-  expect(style.sprite).toBe('https://protomaps.github.io/basemaps-assets/sprites/v4/dark')
+  expect(style.sprite).toMatch(/^http:\/\/localhost:\d+\/basemaps-assets\/sprites\/v4\/dark$/)
   expect(style.layers.length).toBeGreaterThan(0)
   expect(style.metadata['pmtile-tool:style']).toEqual({ base: 'dark', overrides: {} })
+})
+
+test.describe('dark device theme', () => {
+  test.use({ colorScheme: 'dark' })
+
+  test('first visit starts on the dark map and a dark interface', async ({ page }) => {
+    await page.goto('/')
+    expect((await mapState(page)).styleId).toBe('dark')
+    const background = await page.evaluate(
+      () => getComputedStyle(document.querySelector('[data-map-inset]') as HTMLElement).backgroundColor,
+    )
+    expect(background).toBe('rgb(23, 30, 29)')
+  })
 })
 
 test.describe('mobile', () => {
