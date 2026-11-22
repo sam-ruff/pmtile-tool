@@ -1,4 +1,3 @@
-use geo::algorithm::validation::Validation;
 use geo::{MultiPolygon, Polygon};
 use geojson::GeometryValue;
 
@@ -32,8 +31,10 @@ pub fn to_multipolygon(geometry: &geojson::Geometry) -> Option<MultiPolygon> {
     }
 }
 
-/// Validate a user-supplied GeoJSON geometry for use as an extract region.
-pub fn validate_geometry(
+/// Parse a user-supplied GeoJSON geometry and check its type, size and
+/// coordinate range. Topology (self-intersections, overlaps) is not checked
+/// here: `compose::compose_export_area` repairs it with a union.
+pub fn parse_user_geometry(
     geometry: &geojson::Geometry,
     max_vertices: usize,
 ) -> Result<MultiPolygon, ValidationError> {
@@ -74,12 +75,6 @@ pub fn validate_geometry(
         return Err(ValidationError::OutOfRange);
     }
 
-    if !multi.is_valid() {
-        return Err(ValidationError::Invalid(
-            "rings must be closed, non-self-intersecting and correctly nested".into(),
-        ));
-    }
-
     Ok(multi)
 }
 
@@ -100,7 +95,7 @@ mod tests {
             [0.0, 1.0],
             [0.0, 0.0],
         ]);
-        let multi = validate_geometry(&geometry, 1000).expect("valid");
+        let multi = parse_user_geometry(&geometry, 1000).expect("valid");
         assert_eq!(multi.0.len(), 1);
     }
 
@@ -108,7 +103,7 @@ mod tests {
     fn rejects_non_polygon() {
         let geometry = geojson::Geometry::new_point([0.0, 0.0]);
         assert!(matches!(
-            validate_geometry(&geometry, 1000),
+            parse_user_geometry(&geometry, 1000),
             Err(ValidationError::WrongType)
         ));
     }
@@ -123,7 +118,7 @@ mod tests {
             [0.0, 0.0],
         ]);
         assert!(matches!(
-            validate_geometry(&geometry, 4),
+            parse_user_geometry(&geometry, 4),
             Err(ValidationError::TooManyVertices(5, 4))
         ));
     }
@@ -132,14 +127,14 @@ mod tests {
     fn rejects_out_of_range() {
         let geometry = polygon_geometry(vec![[-190.0, 0.0], [1.0, 0.0], [1.0, 1.0], [-190.0, 0.0]]);
         assert!(matches!(
-            validate_geometry(&geometry, 1000),
+            parse_user_geometry(&geometry, 1000),
             Err(ValidationError::OutOfRange)
         ));
     }
 
     #[test]
-    fn rejects_self_intersection() {
-        // Bowtie: crosses itself in the middle.
+    fn leaves_self_intersection_for_repair() {
+        // Bowtie: crosses itself in the middle. Repair happens in compose.
         let geometry = polygon_geometry(vec![
             [0.0, 0.0],
             [1.0, 1.0],
@@ -147,17 +142,14 @@ mod tests {
             [0.0, 1.0],
             [0.0, 0.0],
         ]);
-        assert!(matches!(
-            validate_geometry(&geometry, 1000),
-            Err(ValidationError::Invalid(_))
-        ));
+        assert!(parse_user_geometry(&geometry, 1000).is_ok());
     }
 
     #[test]
     fn rejects_empty() {
         let geometry = geojson::Geometry::new_multi_polygon(Vec::<Vec<Vec<[f64; 2]>>>::new());
         assert!(matches!(
-            validate_geometry(&geometry, 1000),
+            parse_user_geometry(&geometry, 1000),
             Err(ValidationError::Empty)
         ));
     }

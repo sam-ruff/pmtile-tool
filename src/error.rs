@@ -15,6 +15,15 @@ pub enum ApiError {
         estimated_tiles: u64,
         max_tiles: u64,
     },
+    #[error(
+        "export too large: about {:.1} GB, over the {:.1} GB limit",
+        gb(*estimated_bytes),
+        gb(*max_bytes)
+    )]
+    TooManyBytes {
+        estimated_bytes: u64,
+        max_bytes: u64,
+    },
     #[error("{0}")]
     RateLimited(String),
     #[error("{0}")]
@@ -27,6 +36,10 @@ pub enum ApiError {
     Internal(String),
 }
 
+fn gb(bytes: u64) -> f64 {
+    bytes as f64 / crate::jobs::cleanup::GIB as f64
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct ErrorBody {
     pub error: String,
@@ -34,6 +47,10 @@ pub struct ErrorBody {
     pub estimated_tiles: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tiles: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
 }
 
 impl ApiError {
@@ -41,7 +58,7 @@ impl ApiError {
         match self {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Validation(_) => StatusCode::BAD_REQUEST,
-            Self::TooLarge { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::TooLarge { .. } | Self::TooManyBytes { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Busy(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Conflict(_) => StatusCode::CONFLICT,
@@ -63,10 +80,19 @@ impl IntoResponse for ApiError {
             } => (Some(*estimated_tiles), Some(*max_tiles)),
             _ => (None, None),
         };
+        let (estimated_bytes, max_bytes) = match &self {
+            Self::TooManyBytes {
+                estimated_bytes,
+                max_bytes,
+            } => (Some(*estimated_bytes), Some(*max_bytes)),
+            _ => (None, None),
+        };
         let body = ErrorBody {
             error: self.to_string(),
             estimated_tiles,
             max_tiles,
+            estimated_bytes,
+            max_bytes,
         };
         (self.status(), Json(body)).into_response()
     }

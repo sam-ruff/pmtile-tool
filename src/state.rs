@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::AppConfig;
+use crate::extract::sizer::{ExtractSizer, SizeEstimator};
 use crate::jobs::engine::JobEngine;
 use crate::jobs::store::JobStore;
 use crate::martin_embed::TileBackend;
@@ -14,9 +15,12 @@ pub struct AppContext {
     pub regions: Arc<RegionCatalog>,
     pub store: Arc<dyn JobStore>,
     pub engine: Arc<JobEngine>,
+    pub sizes: Arc<SizeEstimator>,
 }
 
 impl AppContext {
+    /// Sizes are approximated from geometry until `with_sizer` adds a
+    /// measuring sizer.
     pub fn new(
         config: AppConfig,
         tiles: Arc<dyn TileBackend>,
@@ -30,6 +34,12 @@ impl AppContext {
             regions,
             store,
             engine,
+            sizes: Arc::new(SizeEstimator::new(None)),
         }
+    }
+
+    pub fn with_sizer(mut self, sizer: Arc<dyn ExtractSizer>) -> Self {
+        self.sizes = Arc::new(SizeEstimator::new(Some(sizer)));
+        self
     }
 }

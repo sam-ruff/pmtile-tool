@@ -2,6 +2,7 @@ import type { PmtilesApi } from './PmtilesApi'
 import {
   ApiRequestError,
   type Estimate,
+  type ExportArea,
   type GeoJSONGeometry,
   type JobView,
   type RegionDetail,
@@ -31,6 +32,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+/// Wire shape of an export area; empty parts are omitted.
+export function exportBody(area: ExportArea): { geometry?: GeoJSONGeometry; region_ids?: string[] } {
+  return {
+    ...(area.geometry ? { geometry: area.geometry } : {}),
+    ...(area.regionIds.length > 0 ? { region_ids: area.regionIds } : {}),
+  }
+}
+
 function postJson(body: unknown): RequestInit {
   return {
     method: 'POST',
@@ -56,16 +65,20 @@ export class HttpPmtilesApi implements PmtilesApi {
     return request(`/api/v1/regions/${encodeURIComponent(id)}/extract`, { method: 'POST' })
   }
 
-  createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView> {
-    return request('/api/v1/exports', postJson({ geometry, maxzoom, name }))
+  createExport(area: ExportArea, maxzoom: number, name?: string): Promise<JobView> {
+    return request('/api/v1/exports', postJson({ ...exportBody(area), maxzoom, name }))
   }
 
-  estimateExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<Estimate> {
-    return request('/api/v1/exports/estimate', postJson({ geometry, maxzoom }))
+  estimateExport(area: ExportArea, maxzoom: number): Promise<Estimate> {
+    return request('/api/v1/exports/estimate', postJson({ ...exportBody(area), maxzoom }))
   }
 
   getExport(id: string): Promise<JobView> {
     return request(`/api/v1/exports/${encodeURIComponent(id)}`)
+  }
+
+  exportGeometry(id: string): Promise<GeoJSONGeometry> {
+    return request(`/api/v1/exports/${encodeURIComponent(id)}/geometry`)
   }
 
   deleteExport(id: string): Promise<void> {

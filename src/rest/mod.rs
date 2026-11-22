@@ -86,6 +86,10 @@ pub fn build_router(ctx: AppContext) -> Router {
             .route(
                 "/api/v1/exports/{id}/download",
                 get(download::download_export),
+            )
+            .route(
+                "/api/v1/exports/{id}/geometry",
+                get(exports::export_geometry),
             ),
         limits.download_rate_limit_per_second,
         limits.download_rate_limit_burst,

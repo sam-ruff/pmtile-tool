@@ -39,10 +39,10 @@ pub trait JobStore: Send + Sync {
     async fn active_for_ip(&self, ip: &str) -> Result<u32, StoreError>;
     async fn queued_count(&self) -> Result<u32, StoreError>;
     async fn running_count(&self) -> Result<u32, StoreError>;
-    /// Estimated tiles committed by jobs that are queued or running but whose
-    /// output is not yet on disk. Multiplied by avg_tile_bytes this reserves
-    /// budget for in-flight work so it cannot be over-committed.
-    async fn reserved_tiles(&self) -> Result<u64, StoreError>;
+    /// Estimated bytes committed by jobs that are queued or running but whose
+    /// output is not yet on disk, so in-flight work cannot over-commit the
+    /// disk budget.
+    async fn reserved_bytes(&self) -> Result<u64, StoreError>;
     async fn touch_download(&self, id: &str, at: DateTime<Utc>) -> Result<(), StoreError>;
     /// Done jobs whose expires_at has passed.
     async fn expired_jobs(&self, now: DateTime<Utc>) -> Result<Vec<Job>, StoreError>;
@@ -115,6 +115,7 @@ fn job_from_row(row: &SqliteRow) -> Result<Job, StoreError> {
         geometry: row.try_get("geometry")?,
         maxzoom: row.try_get::<i64, _>("maxzoom")? as u8,
         estimated_tiles: row.try_get::<i64, _>("estimated_tiles")? as u64,
+        estimated_bytes: row.try_get::<i64, _>("estimated_bytes")?.max(0) as u64,
         file_path: row.try_get("file_path")?,
         file_size: row
             .try_get::<Option<i64>, _>("file_size")?
@@ -134,9 +135,9 @@ impl JobStore for SqliteJobStore {
     async fn insert(&self, job: &Job) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO jobs (id, kind, status, name, client_ip, region_id, geometry, maxzoom, \
-             estimated_tiles, file_path, file_size, error, pinned, created_at, started_at, \
-             finished_at, expires_at, last_download_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             estimated_tiles, estimated_bytes, file_path, file_size, error, pinned, created_at, \
+             started_at, finished_at, expires_at, last_download_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&job.id)
         .bind(job.kind.as_str())
@@ -147,6 +148,7 @@ impl JobStore for SqliteJobStore {
         .bind(&job.geometry)
         .bind(job.maxzoom as i64)
         .bind(job.estimated_tiles as i64)
+        .bind(job.estimated_bytes as i64)
         .bind(&job.file_path)
         .bind(job.file_size.map(|v| v as i64))
         .bind(&job.error)
@@ -247,14 +249,14 @@ impl JobStore for SqliteJobStore {
         Ok(count as u32)
     }
 
-    async fn reserved_tiles(&self) -> Result<u64, StoreError> {
-        let tiles: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(estimated_tiles), 0) FROM jobs \
+    async fn reserved_bytes(&self) -> Result<u64, StoreError> {
+        let bytes: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(estimated_bytes), 0) FROM jobs \
              WHERE status IN ('queued', 'running')",
         )
         .fetch_one(&self.pool)
         .await?;
-        Ok(tiles.max(0) as u64)
+        Ok(bytes.max(0) as u64)
     }
 
     async fn touch_download(&self, id: &str, at: DateTime<Utc>) -> Result<(), StoreError> {
@@ -316,9 +318,16 @@ impl JobStore for SqliteJobStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::estimate::Estimate;
 
     fn custom_job(ip: &str) -> Job {
-        Job::new_custom("test".into(), "{}".into(), 10, 1000, ip.into())
+        Job::new_custom(
+            "test".into(),
+            "{}".into(),
+            10,
+            crate::jobs::test_estimate(1000),
+            ip.into(),
+        )
     }
 
     #[tokio::test]
@@ -423,11 +432,12 @@ mod tests {
         expired.expires_at = Some(now - chrono::Duration::hours(1));
         store.insert(&expired).await.expect("insert");
 
-        let mut pinned_region = Job::new_region("europe".into(), "{}".into(), 15, 0, true);
+        let none = crate::jobs::test_estimate(0);
+        let mut pinned_region = Job::new_region("europe".into(), "{}".into(), 15, none, true);
         pinned_region.status = JobStatus::Done;
         store.insert(&pinned_region).await.expect("insert");
 
-        let mut lazy_region = Job::new_region("england".into(), "{}".into(), 15, 0, false);
+        let mut lazy_region = Job::new_region("england".into(), "{}".into(), 15, none, false);
         lazy_region.status = JobStatus::Done;
         store.insert(&lazy_region).await.expect("insert");
 
@@ -445,27 +455,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reserved_tiles_sums_active_jobs() {
+    async fn reserved_bytes_sums_active_jobs() {
         let store = SqliteJobStore::open_in_memory().await.expect("open");
+        let job = |name: &str, bytes: u64| {
+            let estimate = Estimate {
+                tiles: 1,
+                bytes,
+                measured: true,
+            };
+            Job::new_custom(name.into(), "{}".into(), 10, estimate, "ip".into())
+        };
         // Queued + running count toward reservations; done does not.
-        store
-            .insert(&Job::new_custom(
-                "a".into(),
-                "{}".into(),
-                10,
-                1000,
-                "ip".into(),
-            ))
-            .await
-            .expect("insert");
-        let mut running = Job::new_custom("b".into(), "{}".into(), 10, 500, "ip".into());
+        store.insert(&job("a", 1000)).await.expect("insert");
+        let mut running = job("b", 500);
         running.status = JobStatus::Running;
         store.insert(&running).await.expect("insert");
-        let mut done = Job::new_custom("c".into(), "{}".into(), 10, 9999, "ip".into());
+        let mut done = job("c", 9999);
         done.status = JobStatus::Done;
         store.insert(&done).await.expect("insert");
 
-        assert_eq!(store.reserved_tiles().await.expect("reserved"), 1500);
+        assert_eq!(store.reserved_bytes().await.expect("reserved"), 1500);
     }
 
     #[tokio::test]

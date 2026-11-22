@@ -46,8 +46,8 @@ describe('buildMaplibreStyle', () => {
     )
   })
 
-  it('uses the Protomaps hosted sprite and glyph assets', () => {
-    expect(style.sprite).toBe('https://protomaps.github.io/basemaps-assets/sprites/v4/dark')
+  it('serves sprites from this instance and glyphs from Protomaps', () => {
+    expect(style.sprite).toBe(`${window.location.origin}/basemaps-assets/sprites/v4/dark`)
     expect(style.glyphs).toBe(
       'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
     )

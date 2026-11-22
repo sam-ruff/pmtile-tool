@@ -8,6 +8,7 @@ use super::runner::{RunnerPaths, run_job};
 use super::store::{JobStore, StoreError};
 use super::{Job, JobStatus, StatusDetail};
 use crate::extract::PmtilesExtractor;
+use crate::extract::estimate::Estimate;
 use crate::regions::RegionCatalog;
 
 const IDLE_POLL: StdDuration = StdDuration::from_secs(30);
@@ -99,9 +100,13 @@ impl JobEngine {
             }
             let geometry = serde_json::to_string(&region.geometry)
                 .map_err(|e| StoreError::Db(format!("seed geometry serialisation: {e}")))?;
-            let estimated_tiles = crate::extract::validate::to_multipolygon(&region.geometry)
-                .map(|m| crate::extract::estimate::estimate(&m, maxzoom, avg_tile_bytes).tiles)
-                .unwrap_or(0);
+            let estimate = crate::extract::validate::to_multipolygon(&region.geometry)
+                .map(|m| crate::extract::estimate::estimate(&m, maxzoom, avg_tile_bytes))
+                .unwrap_or(Estimate {
+                    tiles: 0,
+                    bytes: 0,
+                    measured: false,
+                });
             // Replace any stale (failed/expired) row before re-inserting.
             self.store.delete(id).await?;
             tracing::info!(region = id, "seeding region extract");
@@ -109,7 +114,7 @@ impl JobEngine {
                 id.clone(),
                 geometry,
                 maxzoom,
-                estimated_tiles,
+                estimate,
                 true,
             ))
             .await?;
@@ -210,7 +215,13 @@ mod tests {
         );
         engine.spawn_workers();
 
-        let job = Job::new_custom("t".into(), "{}".into(), 10, 100, "1.1.1.1".into());
+        let job = Job::new_custom(
+            "t".into(),
+            "{}".into(),
+            10,
+            crate::jobs::test_estimate(100),
+            "1.1.1.1".into(),
+        );
         let id = job.id.clone();
         engine.enqueue(job).await.expect("enqueue");
 
@@ -280,7 +291,7 @@ mod tests {
                 "t".into(),
                 "{}".into(),
                 10,
-                100,
+                crate::jobs::test_estimate(100),
                 "a".into(),
             ))
             .await
@@ -288,7 +299,13 @@ mod tests {
         store.claim_next_queued().await.expect("claim");
 
         // A done job whose file is gone.
-        let mut lost = Job::new_region("europe".into(), "{}".into(), 15, 0, false);
+        let mut lost = Job::new_region(
+            "europe".into(),
+            "{}".into(),
+            15,
+            crate::jobs::test_estimate(0),
+            false,
+        );
         lost.status = JobStatus::Done;
         lost.file_path = Some(
             dir.path()

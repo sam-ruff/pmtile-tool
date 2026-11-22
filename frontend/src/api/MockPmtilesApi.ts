@@ -1,7 +1,16 @@
+import {
+  boundsOf as geometryBounds,
+  countVertices,
+  mergeGeometries,
+  polygonsOf,
+} from '../map/geometry'
+import type { Bounds } from '../map/geometry'
 import type { PmtilesApi } from './PmtilesApi'
 import {
   ApiRequestError,
   type Estimate,
+  type ExportArea,
+  type Limits,
   type GeoJSONGeometry,
   type JobView,
   type RegionDetail,
@@ -31,24 +40,8 @@ function box(minLon: number, minLat: number, maxLon: number, maxLat: number): Ge
   }
 }
 
-function boundsOf(geometry: GeoJSONGeometry): [number, number, number, number] {
-  const rings =
-    geometry.type === 'Polygon'
-      ? (geometry.coordinates as number[][][])
-      : (geometry.coordinates as number[][][][]).flat()
-  let w = Infinity
-  let s = Infinity
-  let e = -Infinity
-  let n = -Infinity
-  for (const ring of rings) {
-    for (const [lon, lat] of ring) {
-      w = Math.min(w, lon)
-      e = Math.max(e, lon)
-      s = Math.min(s, lat)
-      n = Math.max(n, lat)
-    }
-  }
-  return [w, s, e, n]
+function boundsOf(geometry: GeoJSONGeometry): Bounds | undefined {
+  return geometryBounds([geometry]) ?? undefined
 }
 
 const REGIONS: MockRegion[] = [
@@ -85,10 +78,23 @@ const REGIONS: MockRegion[] = [
 
 const MOCK_JOBS_KEY = 'pmtile-tool:mock-jobs'
 
+/** Roughly what land tiles cost in a real planet build. */
+export const MOCK_BYTES_PER_TILE = 1500
+
+export const MOCK_LIMITS: Limits = {
+  max_maxzoom: 15,
+  max_export_bytes: 10 * 1024 ** 3,
+  max_estimated_tiles: 150_000_000,
+  max_polygon_vertices: 1000,
+  max_export_regions: 20,
+  export_ttl_hours: 48,
+}
+
 /// Simulated job lifecycle so the whole UI works with no backend. Jobs are
 /// persisted to localStorage so reloads behave like the real backend.
 export class MockPmtilesApi implements PmtilesApi {
   private jobs = new Map<string, JobView>()
+  private geometries = new Map<string, GeoJSONGeometry>()
   private counter = 0
 
   constructor() {
@@ -176,11 +182,47 @@ export class MockPmtilesApi implements PmtilesApi {
     return job
   }
 
-  async createExport(geometry: GeoJSONGeometry, maxzoom: number, name?: string): Promise<JobView> {
-    const estimate = await this.estimateExport(geometry, maxzoom)
-    if (estimate.tiles > 100_000_000) {
-      throw new ApiRequestError(422, 'export too large', estimate.tiles, 100_000_000)
+  /// Mirrors the server's composition: drawn polygons plus catalogue regions
+  /// as one MultiPolygon (overlaps are not unioned in mock mode).
+  private compose(area: ExportArea): GeoJSONGeometry {
+    const parts: GeoJSONGeometry[] = []
+    if (area.geometry) {
+      if (countVertices(area.geometry) > MOCK_LIMITS.max_polygon_vertices) {
+        throw new ApiRequestError(
+          400,
+          `geometry has ${countVertices(area.geometry)} vertices, the maximum is ${MOCK_LIMITS.max_polygon_vertices}`,
+        )
+      }
+      parts.push(area.geometry)
     }
+    const regionIds = [...new Set(area.regionIds)]
+    if (regionIds.length > MOCK_LIMITS.max_export_regions) {
+      throw new ApiRequestError(
+        400,
+        `at most ${MOCK_LIMITS.max_export_regions} regions can be combined in one export`,
+      )
+    }
+    for (const id of regionIds) {
+      const region = REGIONS.find((r) => r.summary.id === id)
+      if (!region) throw new ApiRequestError(400, `unknown region: ${id}`)
+      parts.push(region.geometry)
+    }
+    const merged = mergeGeometries(parts)
+    if (!merged) throw new ApiRequestError(400, 'an export needs a drawn area or at least one region')
+    return merged
+  }
+
+  async createExport(area: ExportArea, maxzoom: number, name?: string): Promise<JobView> {
+    const estimate = await this.estimateExport(area, maxzoom)
+    if (estimate.tiles > MOCK_LIMITS.max_estimated_tiles) {
+      throw new ApiRequestError(
+        422,
+        'export too large',
+        estimate.tiles,
+        MOCK_LIMITS.max_estimated_tiles,
+      )
+    }
+    const geometry = this.compose(area)
     this.counter += 1
     const id = `mock-export-${this.counter}`
     const job: JobView = {
@@ -194,18 +236,28 @@ export class MockPmtilesApi implements PmtilesApi {
       bounds: boundsOf(geometry),
     }
     this.jobs.set(id, job)
+    this.geometries.set(id, geometry)
     this.persist()
     this.advance(id, estimate.bytes)
     return job
   }
 
-  async estimateExport(geometry: GeoJSONGeometry, maxzoom: number): Promise<Estimate> {
+  async exportGeometry(id: string): Promise<GeoJSONGeometry> {
+    const job = this.jobs.get(id)
+    if (!job || job.kind !== 'custom') {
+      throw new ApiRequestError(404, `unknown export job: ${id}`)
+    }
+    const geometry = this.geometries.get(id)
+    if (geometry) return geometry
+    const [w = 0, s = 0, e = 0, n = 0] = job.bounds ?? []
+    return box(w, s, e, n)
+  }
+
+  async estimateExport(exportArea: ExportArea, maxzoom: number): Promise<Estimate> {
+    const geometry = this.compose(exportArea)
     // Rough mercator-free approximation, fine for mock mode.
-    const rings =
-      geometry.type === 'Polygon'
-        ? (geometry.coordinates as number[][][])
-        : (geometry.coordinates as number[][][][]).flat()
-    let area = 0
+    const rings = polygonsOf(geometry).flat()
+    let fraction = 0
     for (const ring of rings) {
       let sum = 0
       for (let i = 0; i < ring.length - 1; i += 1) {
@@ -213,14 +265,14 @@ export class MockPmtilesApi implements PmtilesApi {
         const [x2 = 0, y2 = 0] = ring[i + 1] ?? []
         sum += x1 * y2 - x2 * y1
       }
-      area += Math.abs(sum / 2) / (360 * 180)
+      fraction += Math.abs(sum / 2) / (360 * 180)
     }
     let tiles = 0
     for (let z = 0; z <= maxzoom; z += 1) {
-      tiles += area * 4 ** z + 1
+      tiles += fraction * 4 ** z + 1
     }
     tiles = Math.round(tiles)
-    return { tiles, bytes: tiles * 85 }
+    return { tiles, bytes: tiles * MOCK_BYTES_PER_TILE, measured: true }
   }
 
   async getExport(id: string): Promise<JobView> {
@@ -244,6 +296,7 @@ export class MockPmtilesApi implements PmtilesApi {
       disk_free_bytes: 500_000_000_000,
       region_cache_bytes: 42_000_000_000,
       version: 'mock',
+      limits: MOCK_LIMITS,
     }
   }
 }

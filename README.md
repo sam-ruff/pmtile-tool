@@ -2,9 +2,11 @@
 
 A web tool for creating and downloading [PMTiles](https://docs.protomaps.com/pmtiles/) basemap extracts, deployed at pmtiles.samruff.dev.
 
-Pick a ready-made region (Geofabrik-style hierarchy, continents down to UK counties) or draw your own polygon on the map and export it at a chosen zoom level. Extracts are cut from a planet-scale archive with go-pmtiles and stay downloadable for 48 hours. Finished exports can be previewed straight on the map before downloading.
+Pick a ready-made region (Geofabrik-style hierarchy, continents down to UK counties) or draw your own areas on the map as rectangles, polygons, circles or freehand shapes, and export them at a chosen zoom level. One export can combine several drawn shapes and catalogue regions: overlapping parts merge, separate parts stay separate, and everything lands in a single `.pmtiles` file. Extracts are cut from a planet-scale archive with go-pmtiles and stay downloadable for 48 hours. Finished exports can be previewed straight on the map before downloading.
 
 The backend is a single Rust binary: an axum app serving the API and the embedded Vue frontend, with a [martin](https://github.com/maplibre/martin) tile server (via the martin-embedded crate) running on loopback to serve the basemap. Jobs are queued in SQLite and rate limited per client.
+
+It also runs on a network with no internet access, as long as the planet archive is on local disk. [docs/lan-deployment.md](docs/lan-deployment.md) covers which files to fetch and where from, the config to change, and running it with Docker or as a bare binary.
 
 ## Development
 

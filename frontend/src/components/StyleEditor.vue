@@ -13,6 +13,7 @@ import {
 import type { CustomMapStyle, FlavourGroup } from '../map/flavours'
 import { mapController } from '../map/controller'
 import { useStylesStore } from '../stores/styles'
+import { X } from '@lucide/vue'
 
 const props = defineProps<{ editing: CustomMapStyle | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -140,7 +141,7 @@ onBeforeUnmount(() => {
     >
       <header class="editor-header">
         <h2>{{ props.editing ? 'Edit style' : 'New custom style' }}</h2>
-        <button class="btn-ghost" aria-label="Close" @click="emit('close')">×</button>
+        <button class="icon-btn" aria-label="Close" @click="emit('close')"><X :size="18" /></button>
       </header>
 
       <div class="editor-body">
@@ -148,6 +149,7 @@ onBeforeUnmount(() => {
           <span>Name</span>
           <input
             v-model="draft.name"
+            class="input"
             type="text"
             placeholder="e.g. Night ops"
             data-testid="style-name"
@@ -156,7 +158,7 @@ onBeforeUnmount(() => {
 
         <label class="field">
           <span>Base preset</span>
-          <select v-model="draft.base" data-testid="style-base">
+          <select v-model="draft.base" class="input" data-testid="style-base">
             <option v-for="name in FLAVOUR_NAMES" :key="name" :value="name">
               {{ FLAVOUR_LABELS[name] }}
             </option>
@@ -168,7 +170,7 @@ onBeforeUnmount(() => {
             <span class="colour-label">{{ group.label }}</span>
             <button
               v-if="groupOverridden(group)"
-              class="btn-ghost reset"
+              class="btn btn-ghost reset"
               @click="resetGroup(group)"
             >
               Reset
@@ -193,7 +195,7 @@ onBeforeUnmount(() => {
                 <span class="colour-label">{{ fieldLabel(field) }}</span>
                 <button
                   v-if="field in draft.overrides"
-                  class="btn-ghost reset"
+                  class="btn btn-ghost reset"
                   @click="resetField(field)"
                 >
                   Reset
@@ -242,9 +244,11 @@ onBeforeUnmount(() => {
       </div>
 
       <footer class="editor-footer">
-        <button class="btn" data-testid="style-cancel" @click="emit('close')">Cancel</button>
+        <button class="btn btn-secondary" data-testid="style-cancel" @click="emit('close')">
+          Cancel
+        </button>
         <button
-          class="btn-primary"
+          class="btn btn-primary"
           data-testid="style-save"
           :disabled="!canSave"
           @click="save"
@@ -260,7 +264,7 @@ onBeforeUnmount(() => {
 .editor-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(28, 25, 23, 0.4);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -273,8 +277,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 
@@ -287,8 +291,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-header h2 {
-  margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 
@@ -313,14 +316,6 @@ onBeforeUnmount(() => {
   color: var(--text-muted);
 }
 
-.field select {
-  font: inherit;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-}
 
 .colour-rows {
   display: flex;
@@ -350,6 +345,7 @@ onBeforeUnmount(() => {
 }
 
 .reset {
+  min-height: 28px;
   padding: 2px 8px;
   font-size: 12px;
 }

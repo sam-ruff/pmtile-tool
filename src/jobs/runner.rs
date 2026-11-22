@@ -154,7 +154,7 @@ mod tests {
             "t".into(),
             "{\"type\":\"Polygon\"}".into(),
             10,
-            100,
+            crate::jobs::test_estimate(100),
             "1.1.1.1".into(),
         );
         let job_id = job.id.clone();
@@ -211,7 +211,13 @@ mod tests {
     async fn pinned_region_job_never_expires() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(dir.path());
-        let job = Job::new_region("europe".into(), "{}".into(), 15, 0, true);
+        let job = Job::new_region(
+            "europe".into(),
+            "{}".into(),
+            15,
+            crate::jobs::test_estimate(0),
+            true,
+        );
 
         let mut extractor = MockPmtilesExtractor::new();
         extractor.expect_extract().times(1).returning(|req| {
@@ -253,7 +259,13 @@ mod tests {
     async fn extract_failure_marks_failed_and_cleans_up() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = paths(dir.path());
-        let job = Job::new_custom("t".into(), "{}".into(), 10, 100, "1.1.1.1".into());
+        let job = Job::new_custom(
+            "t".into(),
+            "{}".into(),
+            10,
+            crate::jobs::test_estimate(100),
+            "1.1.1.1".into(),
+        );
         let job_id = job.id.clone();
 
         let mut extractor = MockPmtilesExtractor::new();

@@ -192,7 +192,7 @@ pub fn spawn_sweeper(
 mod tests {
     use super::*;
     use crate::jobs::store::SqliteJobStore;
-    use crate::jobs::{Job, JobKind};
+    use crate::jobs::{Job, JobKind, test_estimate};
     use chrono::Duration;
 
     async fn done_job(
@@ -206,8 +206,12 @@ mod tests {
         let path = dir.join(format!("{id}.pmtiles"));
         std::fs::write(&path, vec![0u8; 10]).expect("write file");
         let mut job = match kind {
-            JobKind::Custom => Job::new_custom(id.into(), "{}".into(), 10, 1, "ip".into()),
-            JobKind::Region => Job::new_region(id.into(), "{}".into(), 15, 1, pinned),
+            JobKind::Custom => {
+                Job::new_custom(id.into(), "{}".into(), 10, test_estimate(1), "ip".into())
+            }
+            JobKind::Region => {
+                Job::new_region(id.into(), "{}".into(), 15, test_estimate(1), pinned)
+            }
         };
         if kind == JobKind::Custom {
             job.id = id.to_string();

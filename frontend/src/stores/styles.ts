@@ -41,11 +41,20 @@ function saveCustoms(customs: CustomMapStyle[]) {
   }
 }
 
-function loadSelected(): string {
+/// First visit follows the device theme; afterwards the saved choice wins.
+function defaultStyleId(): string {
   try {
-    return localStorage.getItem(SELECTED_KEY) ?? 'light'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   } catch {
     return 'light'
+  }
+}
+
+function loadSelected(): string {
+  try {
+    return localStorage.getItem(SELECTED_KEY) ?? defaultStyleId()
+  } catch {
+    return defaultStyleId()
   }
 }
 

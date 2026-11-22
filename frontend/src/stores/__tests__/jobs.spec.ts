@@ -14,6 +14,19 @@ vi.mock('../../api', async (importOriginal) => {
 })
 
 import { useJobsStore } from '../jobs'
+import type { GeoJSONGeometry } from '../../api'
+
+const SQUARE: GeoJSONGeometry = {
+  type: 'Polygon',
+  coordinates: [
+    [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 0],
+    ],
+  ],
+}
 
 function job(id: string, status: JobView['status'] = 'queued'): JobView {
   return {
@@ -41,22 +54,22 @@ describe('jobs store', () => {
     expect(JSON.parse(localStorage.getItem('pmtile-tool:job-ids') ?? '[]')).toEqual(['b', 'a'])
   })
 
-  it('untrack removes id, job and preview', () => {
+  it('untrack removes id and job', () => {
     const store = useJobsStore()
     store.track(job('a'))
-    store.previewId = 'a'
     store.untrack('a')
     expect(store.ordered).toEqual([])
-    expect(store.previewId).toBeNull()
     expect(JSON.parse(localStorage.getItem('pmtile-tool:job-ids') ?? '[]')).toEqual([])
   })
 
   it('createExport tracks the new job', async () => {
     fakeApi.createExport.mockResolvedValue(job('new-job'))
     const store = useJobsStore()
-    const created = await store.createExport(
-      { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
+    const created = await store.createExport({ geometry: SQUARE, regionIds: ['wales'] }, 10)
+    expect(fakeApi.createExport).toHaveBeenCalledWith(
+      { geometry: SQUARE, regionIds: ['wales'] },
       10,
+      undefined,
     )
     expect(created?.id).toBe('new-job')
     expect(store.ids).toContain('new-job')
@@ -66,10 +79,7 @@ describe('jobs store', () => {
   it('createExport surfaces API errors', async () => {
     fakeApi.createExport.mockRejectedValue(new Error('export too large'))
     const store = useJobsStore()
-    const created = await store.createExport(
-      { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
-      15,
-    )
+    const created = await store.createExport({ geometry: SQUARE, regionIds: [] }, 15)
     expect(created).toBeNull()
     expect(store.createError).toBe('export too large')
   })
@@ -81,5 +91,38 @@ describe('jobs store', () => {
     const store = useJobsStore()
     await store.load()
     expect(store.ids).toEqual([])
+  })
+
+  it('region downloads are listed alongside custom ones and persisted', () => {
+    const store = useJobsStore()
+    store.track({ ...job('custom-1', 'done'), created_at: '2026-01-01T00:00:00Z' })
+    store.trackRegion('wales', 'Wales', {
+      ...job('wales', 'running'),
+      kind: 'region',
+      region_id: 'wales',
+      created_at: '2026-01-02T00:00:00Z',
+    })
+    expect(store.downloads.map((d) => [d.kind, d.title])).toEqual([
+      ['region', 'Wales'],
+      ['custom', 'custom-1'],
+    ])
+    expect(store.activeCount).toBe(1)
+    expect(JSON.parse(localStorage.getItem('pmtile-tool:region-ids') ?? '[]')).toEqual(['wales'])
+    store.untrackRegion('wales')
+    expect(store.downloads).toHaveLength(1)
+  })
+
+  it('notifies the status listener when a polled job changes status', async () => {
+    const store = useJobsStore()
+    const listener = vi.fn()
+    store.setStatusListener(listener)
+    store.track(job('a', 'running'))
+    fakeApi.getExport.mockResolvedValue(job('a', 'done'))
+    await store.refreshActive()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener.mock.calls[0]?.[0].job.status).toBe('done')
+    expect(listener.mock.calls[0]?.[1]).toBe('running')
+    store.setStatusListener(null)
+    window.clearTimeout(store.pollHandle ?? undefined)
   })
 })

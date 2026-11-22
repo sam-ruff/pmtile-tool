@@ -1,5 +1,5 @@
-// Full user journey against the running app: draw a rectangle, create an
-// export, wait for completion, download link + map preview.
+// Full user journey against the running app: draw two separate shapes, export
+// them as one file, wait for completion, then download link and map preview.
 //   node scripts/verify-flow.mjs [outputDir]
 import { chromium } from '@playwright/test'
 
@@ -11,37 +11,59 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(String(e)))
 
+async function check(label, fn) {
+  try {
+    await fn()
+    console.log(`${label}: PASS`)
+    return true
+  } catch (e) {
+    console.log(`${label}: FAIL (${String(e).split('\n')[0]})`)
+    return false
+  }
+}
+
+async function rectangle(from, to) {
+  await page.getByTestId('tool-rectangle').click()
+  await page.mouse.click(from[0], from[1])
+  await page.mouse.move(to[0], to[1])
+  await page.mouse.click(to[0], to[1])
+  await page.keyboard.press('Escape')
+}
+
 await page.goto(base, { waitUntil: 'networkidle' })
-await page.getByRole('button', { name: 'Custom export' }).click()
-await page.getByRole('button', { name: 'Draw rectangle' }).click()
 
-// Draw over western Europe-ish area of the world view.
-await page.mouse.click(760, 380)
-await page.mouse.move(860, 460)
-await page.mouse.click(860, 460)
-await page.waitForTimeout(600)
-
-const estimateVisible = await page.getByText('Estimated size').isVisible()
-console.log(`estimate shown: ${estimateVisible ? 'PASS' : 'FAIL'}`)
-
-await page.getByRole('button', { name: 'Create export job' }).click()
-await page.waitForTimeout(400)
-const queuedNote = await page.getByText('Export queued').isVisible()
-console.log(`queued note: ${queuedNote ? 'PASS' : 'FAIL'}`)
-
-await page.getByRole('button', { name: /Jobs/ }).click()
-await page.getByRole('link', { name: 'Download' }).waitFor({ timeout: 30_000 })
-console.log('job completed with download link: PASS')
-
-await page.getByRole('button', { name: 'Preview on map' }).click()
-await page.waitForTimeout(1500)
-const hidePreview = await page.getByRole('button', { name: 'Hide preview' }).isVisible()
-console.log(`preview layer active: ${hidePreview ? 'PASS' : 'FAIL'}`)
-await page.screenshot({ path: `${outDir}/ui-flow-preview.png` })
+const results = [
+  await check('two shapes in the area list', async () => {
+    await rectangle([760, 380], [820, 430])
+    await rectangle([1000, 500], [1060, 540])
+    await page.getByRole('tab', { name: 'Your area (2)' }).waitFor({ timeout: 15_000 })
+  }),
+  await check('estimate shown', async () => {
+    await page.getByTestId('next-step').click()
+    await page.getByTestId('estimate').locator('.size').waitFor({ timeout: 15_000 })
+  }),
+  await check('extract created', async () => {
+    await page.getByTestId('next-step').click()
+    await page.getByTestId('create-extract').click()
+    await page.getByTestId('export-created').waitFor({ timeout: 15_000 })
+  }),
+  await check('job completed with download link', async () => {
+    await page.getByRole('button', { name: 'Open downloads' }).click()
+    await page.getByRole('link', { name: 'Download' }).first().waitFor({ timeout: 120_000 })
+  }),
+  await check('preview active', async () => {
+    await page.getByRole('button', { name: 'Preview', exact: true }).first().click()
+    await page.getByRole('button', { name: 'Hide', exact: true }).waitFor({ timeout: 15_000 })
+    await page.getByRole('button', { name: 'Close downloads' }).click()
+    await page.getByTestId('preview-banner').waitFor({ timeout: 15_000 })
+    await page.waitForLoadState('networkidle')
+    await page.screenshot({ path: `${outDir}/ui-flow-preview.png` })
+  }),
+]
 
 if (errors.length > 0) {
   console.log('page errors:')
   for (const error of errors) console.log(`  ${error}`)
 }
 await browser.close()
-process.exit(errors.length === 0 && estimateVisible && queuedNote && hidePreview ? 0 : 1)
+process.exit(errors.length === 0 && results.every(Boolean) ? 0 : 1)

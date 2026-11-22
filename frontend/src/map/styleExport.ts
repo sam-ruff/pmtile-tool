@@ -13,9 +13,10 @@ const USAGE_NOTE =
   'The source URL expires 48 hours after the export finished; download the ' +
   '.pmtiles file and repoint sources.protomaps.url at wherever you host it.'
 
-/// A self-contained MapLibre style for the exported archive. Sprites and
-/// glyphs come from the Protomaps-hosted assets because this app renders
-/// labels with CSS fonts and serves no glyph endpoint of its own.
+/// A self-contained MapLibre style for the exported archive. Sprites come from
+/// this instance's vendored copy so they work on an offline network; glyphs
+/// still come from Protomaps because this app renders labels with CSS fonts
+/// and serves no glyph endpoint of its own.
 export function buildMaplibreStyle(job: JobView, style: ResolvedMapStyle): object {
   const pmtilesUrl = new URL(job.download_url ?? '', window.location.origin).toString()
   return {
@@ -32,7 +33,7 @@ export function buildMaplibreStyle(job: JobView, style: ResolvedMapStyle): objec
         attribution: ATTRIBUTION,
       },
     },
-    sprite: `${HOSTED_ASSETS}/sprites/v4/${style.base}`,
+    sprite: `${window.location.origin}/basemaps-assets/sprites/v4/${style.base}`,
     glyphs: `${HOSTED_ASSETS}/fonts/{fontstack}/{range}.pbf`,
     layers: layers('protomaps', style.flavor, { lang: 'en' }),
   }
