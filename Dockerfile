@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --target x86_64-unknown-linux-musl \
     && cp target/x86_64-unknown-linux-musl/release/pmtile-tool /tmp/pmtile-tool
 
-FROM cgr.dev/chainguard/static@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9
+FROM cgr.dev/chainguard/static@sha256:8658e9eaeb2294fa0e49b0667f7d66b4e21fa7690b8d2a4c30cd1d013ceb9eb7
 ARG GIT_SHA
 ARG VERSION
 LABEL org.opencontainers.image.source="https://github.com/sam-ruff/pmtile-tool" \

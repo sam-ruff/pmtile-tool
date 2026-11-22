@@ -481,4 +481,66 @@ mod tests {
         assert_eq!(store.requeue_running().await.expect("requeue"), 1);
         assert_eq!(store.queued_count().await.expect("queued"), 1);
     }
+
+    /// Existing databases record each migration's SHA-384 in `_sqlx_migrations`;
+    /// a sqlx bump that changed parsing, naming or checksums would stop them opening.
+    /// Released migrations are pinned; later ones only need to sort after them.
+    #[test]
+    fn embedded_migrations_match_recorded_checksums() {
+        let migrator = sqlx::migrate!("./migrations");
+        let embedded: Vec<(i64, String, String)> = migrator
+            .iter()
+            .map(|m| {
+                let checksum = m.checksum.iter().map(|b| format!("{b:02x}")).collect();
+                (m.version, m.description.to_string(), checksum)
+            })
+            .collect();
+        let released = [
+            (
+                1,
+                "init",
+                "b8c39c7c8b86dbe1dfb7c2eab6ca757962ceae80b909fd6d94113ea3ce3ee82b\
+                 613a3bd67f57d30bf11f1a83427ad05a",
+            ),
+            (
+                2,
+                "job name",
+                "cceeb22c814ae6e7219c1e9988afa97b6879bed124a787c0561e62db9b04536e\
+                 559b084cb4cbfda932bd08c25965a2ac",
+            ),
+        ];
+        assert!(embedded.len() >= released.len(), "{embedded:?}");
+        for ((version, description, checksum), (want_v, want_d, want_c)) in
+            embedded.iter().zip(released)
+        {
+            assert_eq!(
+                (*version, description.as_str(), checksum.as_str()),
+                (want_v, want_d, want_c)
+            );
+        }
+        for pair in embedded.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "versions must ascend: {embedded:?}");
+        }
+        for (version, _, checksum) in &embedded {
+            assert_eq!(checksum.len(), 96, "migration {version} has no SHA-384");
+        }
+    }
+
+    #[tokio::test]
+    async fn file_backed_store_reopens_with_existing_jobs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("jobs.db");
+        let job = custom_job("5.6.7.8");
+        {
+            let store = SqliteJobStore::open(&path).await.expect("first open");
+            store.insert(&job).await.expect("insert");
+            store.pool.close().await;
+        }
+
+        let reopened = SqliteJobStore::open(&path).await.expect("reopen");
+        let loaded = reopened.get(&job.id).await.expect("get").expect("present");
+        assert_eq!(loaded.name, job.name);
+        assert_eq!(loaded.client_ip.as_deref(), Some("5.6.7.8"));
+        assert_eq!(loaded.status, JobStatus::Queued);
+    }
 }
