@@ -17,7 +17,7 @@ use pmtile_tool::jobs::engine::JobEngine;
 use pmtile_tool::jobs::runner::RunnerPaths;
 use pmtile_tool::jobs::store::SqliteJobStore;
 use pmtile_tool::martin_embed::HttpTileBackend;
-use pmtile_tool::regions::RegionCatalog;
+use pmtile_tool::regions::{Region, RegionCatalog};
 use pmtile_tool::rest::build_router;
 use pmtile_tool::state::AppContext;
 use tempfile::TempDir;
@@ -39,6 +39,9 @@ fn find_pmtiles_bin() -> Option<PathBuf> {
 // Polygons inside the committed fixture's bounds (London, z0-4).
 const LONDON_POLYGON: &str = r#"{"type":"Polygon","coordinates":[[[-0.15,51.47],[-0.05,51.47],[-0.05,51.53],[-0.15,51.53],[-0.15,51.47]]]}"#;
 const TWO_DISJOINT_POLYGONS: &str = r#"{"type":"MultiPolygon","coordinates":[[[[-0.19,51.46],[-0.15,51.46],[-0.15,51.49],[-0.19,51.49],[-0.19,51.46]]],[[[-0.05,51.51],[-0.01,51.51],[-0.01,51.54],[-0.05,51.54],[-0.05,51.51]]]]}"#;
+
+// A catalogue region east of the drawn polygons, not touching them.
+const GREENWICH_REGION: &str = r#"{"type":"Polygon","coordinates":[[[0.0,51.46],[0.04,51.46],[0.04,51.49],[0.0,51.49],[0.0,51.46]]]}"#;
 
 /// Router backed by the real extractor, cutting from the tiny fixture.
 async fn real_router() -> (Router, TempDir) {
@@ -76,22 +79,31 @@ async fn real_router() -> (Router, TempDir) {
     engine.spawn_workers();
 
     let backend = Arc::new(HttpTileBackend::new("http://127.0.0.1:9".into()));
-    let regions = Arc::new(RegionCatalog::new(Vec::new()));
+    let greenwich = serde_json::from_str(GREENWICH_REGION).expect("region geometry");
+    let regions = Arc::new(RegionCatalog::new(vec![Region {
+        id: "greenwich".into(),
+        name: "Greenwich".into(),
+        parent: None,
+        geometry: greenwich,
+    }]));
     let ctx = AppContext::new(config, backend, regions, store, engine).with_sizer(sizer);
     (build_router(ctx), dir)
 }
 
-/// Submit an export and wait for it to finish, returning the job id.
+/// Submit an export of a drawn geometry and wait for it to finish.
 async fn run_export(router: &Router, geometry: &str) -> String {
+    run_export_body(router, format!(r#"{{"geometry":{geometry},"maxzoom":4}}"#)).await
+}
+
+/// Submit an export request body and wait for it to finish, returning the job id.
+async fn run_export_body(router: &Router, body: String) -> String {
     let resp = router
         .clone()
         .oneshot(
             Request::post("/api/v1/exports")
                 .header("cf-connecting-ip", CLIENT_IP)
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    r#"{{"geometry":{geometry},"maxzoom":4}}"#
-                )))
+                .body(Body::from(body))
                 .expect("request"),
         )
         .await
@@ -224,4 +236,34 @@ async fn disjoint_areas_export_into_one_archive() {
     let body = resp.into_body().collect().await.expect("body").to_bytes();
     let geometry: serde_json::Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(geometry["coordinates"].as_array().expect("parts").len(), 2);
+}
+
+#[tokio::test]
+#[ignore]
+async fn catalogue_region_and_drawn_shapes_export_together() {
+    let (router, _dir) = real_router().await;
+    let id = run_export_body(
+        &router,
+        format!(r#"{{"geometry":{TWO_DISJOINT_POLYGONS},"region_ids":["greenwich"],"maxzoom":4}}"#),
+    )
+    .await;
+
+    let (status, bytes) = download(&router, &id, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&bytes[..7], b"PMTiles");
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/exports/{id}/geometry"))
+                .header("cf-connecting-ip", CLIENT_IP)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    let geometry: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(geometry["type"], "MultiPolygon");
+    assert_eq!(geometry["coordinates"].as_array().expect("parts").len(), 3);
 }

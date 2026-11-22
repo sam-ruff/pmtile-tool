@@ -146,6 +146,70 @@ test('a toast announces when an extract is ready', async ({ page }) => {
   await expect(page.getByTestId('downloads')).toBeVisible()
 })
 
+test('the circle tool adds a round shape', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('tool-circle').click()
+  await page.mouse.click(900, 450)
+  await page.mouse.move(960, 450)
+  await page.mouse.click(960, 450)
+  await expect.poll(async () => (await mapState(page)).drawnCount).toBe(1)
+  await expect(page.getByText(/Circle 1/)).toBeVisible()
+  const [vertices] = (await mapState(page)).drawnVertexCounts
+  expect(vertices).toBeGreaterThan(8)
+})
+
+test('single-key shortcuts pick each drawing tool', async ({ page }) => {
+  await page.goto('/')
+  const expected: Record<string, string> = {
+    r: 'rectangle',
+    p: 'polygon',
+    f: 'freehand',
+    c: 'circle',
+    v: 'select',
+  }
+  for (const [key, tool] of Object.entries(expected)) {
+    await page.keyboard.press(key)
+    await expect.poll(async () => (await mapState(page)).tool).toBe(tool)
+  }
+})
+
+test('shortcuts are ignored while typing a file name', async ({ page }) => {
+  await page.goto('/')
+  await drawRectangle(page, [600, 300], [680, 360])
+  await page.getByTestId('next-step').click()
+  await page.getByTestId('next-step').click()
+  await page.getByLabel(/File name/).fill('roads')
+  expect((await mapState(page)).tool).toBe('select')
+  await expect(page.getByLabel(/File name/)).toHaveValue('roads')
+})
+
+test('dragging a corner of a selected shape changes its area', async ({ page }) => {
+  await page.goto('/')
+  await drawRectangle(page, [700, 350], [800, 450])
+  const item = page.getByTestId('area-item-drawn')
+  const before = await item.textContent()
+  await item.click()
+  await expect.poll(async () => (await mapState(page)).selectedShape).not.toBeNull()
+  await page.mouse.move(800, 450)
+  await page.mouse.down()
+  await page.mouse.move(860, 500, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(async () => item.textContent()).not.toBe(before)
+})
+
+test('an area over the size limit cannot be exported', async ({ page }) => {
+  await page.goto('/')
+  await drawRectangle(page, [500, 200], [1300, 800])
+  await page.getByTestId('next-step').click()
+  await page.getByLabel(/Max zoom/).fill('15')
+  await expect(page.getByTestId('estimate')).toContainText(/Over the .* limit/)
+  await expect(page.getByTestId('next-step')).toBeDisabled()
+
+  await page.getByLabel(/Max zoom/).fill('4')
+  await expect(page.getByTestId('estimate')).not.toContainText(/Over the .* limit/)
+  await expect(page.getByTestId('next-step')).toBeEnabled()
+})
+
 test('starting over clears the area and returns to the first step', async ({ page }) => {
   await page.goto('/')
   await drawRectangle(page, [600, 300], [680, 360])
